@@ -726,7 +726,7 @@ clsearch(cl_int depth, cl_int limit) {
 // run_clsearch()
 //
 // This function calls clsearch() to find a solution for one of the
-// positions in the clsearch array. It then looks at the state of each
+// positions in the clplaced array. It then looks at the state of each
 // of the positions to determine whether the search needs to be
 // repeated or to return. We would return if one of the searches
 // completed and there are more positions to search or if all of the
