@@ -11,7 +11,7 @@ long mysearch(
 local
 #endif
 short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit) {
-  int row,col,i,j,k,down,right,depth=-1,dup_check_count;
+  int row,col,i,j,k,down,right,depth=-1;
   long res=0;
 #ifdef MYKERNEL
   int placed2[WIDTH*HEIGHT], solcount=0;

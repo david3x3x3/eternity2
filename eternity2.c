@@ -1,7 +1,14 @@
-#include <CL/cl.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <time.h>
+
+#ifdef MAC
+#include <OpenCL/cl.h>
+#else  
+#include <CL/cl.h>
+#endif
 
 typedef struct {
   const char *name;
@@ -110,7 +117,8 @@ clerror(int err, char *msg) {
 }
 
 
-int init() {
+void
+init() {
   int i,j,k,m,down,right,maxm=0;
   char *c;
 
@@ -230,7 +238,7 @@ int init() {
   sprintf(c, "}");
   c += strlen(c);
 
-  printf("table_size = %d\n", strlen(fit_table_buffer)+1);
+  printf("table_size = %zu\n", strlen(fit_table_buffer)+1);
 }
 
 cl_short *clplaced;
@@ -241,8 +249,8 @@ void print_solution(
 global
 #endif
 short *placed, int depth, int count) {
-  int k, ii, jj;
-  printf("solution %ld: ", count);
+  int k, ii;
+  printf("solution %d: ", count);
   for (k=0;k<depth;k++) {
     ii = placed[k];
     /* if (k%width == 0) { */
@@ -262,8 +270,8 @@ void print_solution_martin(
 global
 #endif
 			   short *placed, int depth, int count) {
-  int k, ii, jj;
-  printf("%07ld-", count-1);
+  int k, ii;
+  printf("%07d-", count-1);
   for (k=0;k<depth;k++) {
     ii = placed[k];
     if (ii && fit_table2[ii] >= 0) {
@@ -280,8 +288,8 @@ void print_solution_debug(
 local
 #endif
 			   short *placed, int depth, int count) {
-  int k, ii, jj;
-  printf("%07ld-", count-1);
+  int k, ii;
+  printf("%07d-", count-1);
   for (k=0;k<depth;k++) {
     ii = placed[k];
     /* if (k%width == 0) { */
@@ -305,7 +313,7 @@ long mysearch(
 local
 #endif
 short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit) {
-  int row,col,i,j,k,down,right,depth=-1,dup_check_count;
+  int row,col,i,j,k,down,right,depth=-1;
   long res=0;
 #ifdef MYKERNEL
   int placed2[WIDTH*HEIGHT], solcount=0;
@@ -551,7 +559,7 @@ int clinit() {
    if(maxwgs && maxwgs < max_workgroup_size) {
      max_workgroup_size = maxwgs;
    }
-   printf("max_workgroup_size = %d\n", max_workgroup_size);
+   printf("max_workgroup_size = %zu\n", max_workgroup_size);
 
    cl_ulong local_mem_size;
    err = clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &local_mem_size, NULL);
@@ -568,7 +576,7 @@ int clinit() {
      clerror(err, "clGetKernelWorkGroupInfo (preferred_work_group_size_multiple)");
      exit(1);
    }
-   printf("preferred_work_group_size_multiple = %d\n", preferred_work_group_size_multiple);
+   printf("preferred_work_group_size_multiple = %zu\n", preferred_work_group_size_multiple);
 
    cl_ulong kernel_local_mem_size;
    err = clGetKernelWorkGroupInfo(kernel, device, CL_KERNEL_LOCAL_MEM_SIZE, sizeof(cl_ulong),
@@ -592,7 +600,7 @@ int clinit() {
      // max_workgroup_size -= max_workgroup_size % preferred_work_group_size_multiple;
    }
 
-   printf("workgroup size = %d\n", max_workgroup_size);
+   printf("workgroup size = %zu\n", max_workgroup_size);
    
    cl_uint max_compute_units;
    err = clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &max_compute_units, NULL);
@@ -604,7 +612,7 @@ int clinit() {
    printf("max_compute_units = %d\n", max_compute_units);
 
    total_work_units = max_compute_units * max_workgroup_size;
-   printf("total_work_units = %d\n", total_work_units);
+   printf("total_work_units = %zu\n", total_work_units);
 
    clplaced = malloc(total_work_units*piececount*sizeof(cl_short));
    for(i=0;i<total_work_units;i++) {
@@ -616,7 +624,8 @@ int clinit() {
    return 0;
 }
 
-int clsearch(cl_int depth, cl_int limit) {
+int
+clsearch(cl_int depth, cl_int limit) {
   cl_int err, clplaced_size=total_work_units*piececount*sizeof(cl_short);
   cl_event kernel_event;
   int *result = malloc(total_work_units*sizeof(cl_int));
@@ -714,6 +723,15 @@ int clsearch(cl_int depth, cl_int limit) {
   return nodes;
 }
 
+// run_clsearch()
+//
+// This function calls clsearch() to find a solution for one of the
+// positions in the clsearch array. It then looks at the state of each
+// of the positions to determine whether the search needs to be
+// repeated or to return. We would return if one of the searches
+// completed and there are more positions to search or if all of the
+// searches have completed.
+
 long
 run_clsearch(int depth, int limit, int mindepth, int toend) {
   static int count=0, active_count=0;
@@ -726,7 +744,7 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
   while(!done) {
     if(!(count%10) && !quiet) {
       total_time = time(NULL)-start_time;
-      printf("search #%d,active=%d,nodes=%ld,time=%d,mnps=%.3f\n", count, active_count, total_nodes,total_time,
+      printf("search #%d,active=%d,nodes=%ld,time=%zu,mnps=%.3f\n", count, active_count, total_nodes,total_time,
 	     total_nodes/(1000000.0*total_time));
     }
     active_count=0;
@@ -773,9 +791,9 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
     count++;
   }
   if(toend) {
-    printf("search #%d,nodes=%ld,time=%d,mnps=%.3f\n", count, total_nodes,total_time,
+    printf("search #%d,nodes=%ld,time=%zu,mnps=%.3f\n", count, total_nodes,total_time,
 	   total_nodes/(1000000.0*total_time));
-    printf("solution count = %d\n", clsolcount);
+    printf("solution count = %ld\n", clsolcount);
   }
   return total_nodes;
 }
@@ -986,7 +1004,7 @@ main(int argc, char *argv[]) {
     printf("searched %ld nodes\n", total);
   }
 
-  printf("total = %ld|count = %ld|time=%d|best=%d\n", total, solcount, time(NULL)-start_time, best);
+  printf("total = %ld|count = %ld|time=%zu|best=%d\n", total, solcount, time(NULL)-start_time, best);
   printf("search complete\n");
 
   if (cl) {
