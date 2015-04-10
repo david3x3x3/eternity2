@@ -1002,9 +1002,12 @@ main(int argc, char *argv[]) {
   if(cl) {
     total += run_clsearch(depth, limit, max, 1);
     printf("searched %ld nodes\n", total);
+    solcount = clsolcount;
   }
-
-  printf("total = %ld|count = %ld|time=%zu|best=%d\n", total, solcount, time(NULL)-start_time, best);
+  time_t total_time = time(NULL)-start_time;
+  printf("total = %13ld|count = %ld|time=%zu:%02zu:%02zu|mnps=%.3f|best=%d\n",
+	 total, solcount, total_time/3600, (total_time%3600)/60, total_time%60,
+	 total/(1000000.0*total_time), best);
   printf("search complete\n");
 
   if (cl) {
