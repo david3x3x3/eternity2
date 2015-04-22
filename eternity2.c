@@ -27,7 +27,7 @@ int edgecount=0;
 int piececount,*placed2;
 int best=0;
 int ft_cols=15;
-int quiet=0, usecpu=0, maxwgs=0, maxcu=0;
+int quiet=0, usecpu=0, maxwgs=0, maxcu=0, globmem=0;
 
 cl_program program;
 cl_kernel kernel;
@@ -195,7 +195,7 @@ init() {
   //printf("fit_table2_size = %d\n", fit_table2_size);
 
   // format fit_table1 and fit_table2 for kernel
-  sprintf(c, "__constant int width=%d, height=%d, edgecount=%d, ft_cols=%d, fit_table1[] = {", width, height, edgecount, maxm); //, edgecount*edgecount*4*maxm);
+  sprintf(c, "__constant int width=%d, height=%d, edgecount=%d, fit_table1[] = {", width, height, edgecount); //, edgecount*edgecount*4*maxm);
   c += strlen(c);
 
   for (i=0; i<edgecount*edgecount*4;i++) {
@@ -246,7 +246,7 @@ long solcount = 0, clsolcount=0;
 
 void print_solution(
 #ifdef MYKERNEL
-global
+MEMTYPE
 #endif
 short *placed, int depth, int count) {
   int k, ii;
@@ -267,7 +267,7 @@ short *placed, int depth, int count) {
 
 void print_solution_martin(
 #ifdef MYKERNEL
-global
+MEMTYPE
 #endif
 			   short *placed, int depth, int count) {
   int k, ii;
@@ -285,7 +285,7 @@ global
 
 void print_solution_debug(
 #ifdef MYKERNEL
-local
+MEMTYPE
 #endif
 			   short *placed, int depth, int count) {
   int k, ii;
@@ -306,11 +306,13 @@ local
 FITTABLE;
 #define WIDTH KWIDTH
 #define HEIGHT KHEIGHT
+#define MEMTYPE KMEMTYPE
+#define GLOBMEM KGLOBMEM
 #endif
 
 long mysearch(
 #ifdef MYKERNEL
-local
+MEMTYPE
 #endif
 short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit) {
   int row,col,i,j,k,down,right,depth=-1;
@@ -509,6 +511,13 @@ int clinit() {
    sprintf(small_buff, "%d", height);
    program_buffer = mysub(program_buffer, "KHEIGHT", small_buff);
    program_buffer = mysub(program_buffer, "FITTABLE", fit_table_buffer);
+   if(globmem) {
+     program_buffer = mysub(program_buffer, "KMEMTYPE", "global");
+     program_buffer = mysub(program_buffer, "KGLOBMEM", "1");
+   } else {
+     program_buffer = mysub(program_buffer, "KMEMTYPE", "local");
+     program_buffer = mysub(program_buffer, "KGLOBMEM", "0");
+   }
    program_size = strlen(program_buffer);
 
    FILE *fp = fopen("debug.cl","w");
@@ -589,11 +598,15 @@ int clinit() {
    }
    printf("kernel_local_mem_size = %ld\n", kernel_local_mem_size);
 
-   printf("solvers per workgroup (memory limit) = %ld\n", local_mem_size/(piececount*sizeof(cl_short)));
-
-   if(local_mem_size/(piececount*sizeof(cl_short)) < max_workgroup_size) {
-     // shrink workgroup size if necessary because of local memory requirements
-     max_workgroup_size = local_mem_size/(piececount*sizeof(cl_short));
+   if (globmem) {
+     printf("solvers per workgroup = %ld\n", max_workgroup_size);
+   } else {
+     printf("solvers per workgroup (memory limit) = %ld\n", local_mem_size/(piececount*sizeof(cl_short)));
+     
+     if(local_mem_size/(piececount*sizeof(cl_short)) < max_workgroup_size) {
+       // shrink workgroup size if necessary because of local memory requirements
+       max_workgroup_size = local_mem_size/(piececount*sizeof(cl_short));
+     }
    }
 
    if(max_workgroup_size / preferred_work_group_size_multiple > 0) {
@@ -676,7 +689,11 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
     exit(1);
   }
   // printf("local memory size = %d\n", max_workgroup_size*piececount*sizeof(cl_short)*2);
-  err = clSetKernelArg(kernel, 4, max_workgroup_size*piececount*sizeof(cl_short), NULL);
+  if (globmem) {
+    err = clSetKernelArg(kernel, 4, sizeof(cl_short), NULL);
+  } else {
+    err = clSetKernelArg(kernel, 4, max_workgroup_size*piececount*sizeof(cl_short), NULL);
+  }
   clerror(err,"Couldn't set the kernel argument");
 
   err = clSetKernelArg(kernel, 5, sizeof(cl_mem), &res_buff);
@@ -890,6 +907,7 @@ print_usage() {
   printf("  -maxcu x   max compute units\n");
   printf("  -q         quiet\n");
   printf("  -cpu       use OpenCL CPU device instead of GPU\n");
+  printf("  -globmem   use global memory instead of local memory\n");
   exit(0);
 }
 
@@ -935,6 +953,9 @@ main(int argc, char *argv[]) {
     } else if (!strcmp(argv[0], "-cpu")) {
       argc--; argv++;
       usecpu=1;
+    } else if (!strcmp(argv[0], "-globmem")) {
+      argc--; argv++;
+      globmem=1;
     } else {
       printf("unknown option %s\n", argv[0]);
       print_usage();
