@@ -295,7 +295,7 @@ MEMTYPE
     /* if (k%width == 0) { */
     /*   printf("\n"); */
     /* } */
-    printf("%d ", ii);
+    printf("%3d ", ii);
   }
   printf("\n");
 }
@@ -759,7 +759,7 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
 long
 run_clsearch(int depth, int limit, int mindepth, int toend) {
   static int count=0, active_count=0;
-  int done=0,i,j,res_depth, res, maxdepth;
+  int done=0,i,j,res, maxdepth;
   static long total_nodes=0;
   time_t total_time;
 
@@ -790,29 +790,21 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
       done=1;
     }
     for(i=0;i<total_work_units;i++) {
-      res_depth=-1;
-      for(j=0;j<piececount;j++) {
-	if(clplaced[i*piececount+j] > 0 && fit_table2[clplaced[i*piececount+j]] > 0) {
-	  res_depth=j;
-	} else {
-	  break;
-	}
-      }
-      res_depth++;
-      //printf("search #%d/%d depth %d\n", count, i, res_depth);
-      //print_solution_debug(clplaced+piececount*i, res_depth+2, clsolcount+1);
-      if(res_depth == piececount) {
+      /* printf("search #%d/%d ", count, i); */
+      /* print_solution_debug(clplaced+piececount*i, piececount, clsolcount+1); */
+      j = clplaced[i*piececount+piececount-1];
+      if(j > 0 && fit_table2[j] > 0) {
 	active_count++;
-	best = res_depth;
+	best = piececount;
 	// search with match
 	printf("%d %03d ", count, i);
-	print_solution_martin(clplaced+piececount*i, res_depth, ++clsolcount);
+	print_solution_martin(clplaced+piececount*i, piececount, ++clsolcount);
 	if(toend) {
 	  done=0;
 	}
-      } else if(res_depth-1 > best) {
+      } else if(best < maxdepth && clplaced[i*piececount+best]) {
 	active_count++;
-	best = res_depth-1;
+	best++;
 	for(j=0;j<best;j++) {
 	  clbest[j] = clplaced[piececount*i+j];
 	}
@@ -823,7 +815,8 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
 	if(toend) {
 	  done=0;
 	}
-      } else if(res_depth <= mindepth) {
+      } else if(clplaced[i*piececount+mindepth] <= 0 &&
+		fit_table2[clplaced[i*piececount+mindepth]] <= 0) {
 	// complete search no match
 	//printf("%d no solution found #%d\n", count, i);
 	if(!toend) {
