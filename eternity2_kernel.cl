@@ -75,7 +75,7 @@ short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit)
     /*   print_solution(placed, depth, 1); */
     /* } */
     
-    if (depth==maxdepth && numbered != -2 && (numbered < 0 || numbered != solcount)) {
+    if (depth==maxdepth && numbered >= 0 && numbered != solcount) {
       solcount++;
       if (doprint) {
 	//if(doprint==2) printf("return 2 (%d,%d)\n", numbered, solcount);
@@ -83,37 +83,39 @@ short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit)
       }
       depth--;
     } else {
-      row = depth/width;
-      col = depth%width;
-      down = 0;
-      right = 0;
-      if (col) {
-	k=fit_table2[placed[(depth-1)]];
-	i=pieces[k/4][(5-k%4)%4];
-	if (col == width-1) {
-	  right=1;
+      if(depth < width*height) {
+	row = depth/width;
+	col = depth%width;
+	down = 0;
+	right = 0;
+	if (col) {
+	  k=fit_table2[placed[(depth-1)]];
+	  i=pieces[k/4][(5-k%4)%4];
+	  if (col == width-1) {
+	    right=1;
+	  }
+	} else {
+	  i=0;
 	}
-      } else {
-	i=0;
-      }
-      if (row) {
-	k=fit_table2[placed[(depth-width)]];
-	j=pieces[k/4][(6-k%4)%4];
-	if (row == height-1) {
-	  down=1;
+	if (row) {
+	  k=fit_table2[placed[(depth-width)]];
+	  j=pieces[k/4][(6-k%4)%4];
+	  if (row == height-1) {
+	    down=1;
+	  }
+	} else {
+	  j=0;
 	}
-      } else {
-	j=0;
+	/* if(doprint == 2) { */
+	/* 	printf("left, up is %d, %d\n", i, j); */
+	/* } */
+	placed[depth] = fit_table1[(i*edgecount+j)*4+down*2+right]-1;
       }
-      /* if(doprint == 2) { */
-      /* 	printf("left, up is %d, %d\n", i, j); */
-      /* } */
-      placed[depth] = fit_table1[(i*edgecount+j)*4+down*2+right]-1;
 
-      if (depth==maxdepth) {
+      if (depth>=maxdepth) {
 	solcount++;
 	//if(doprint==2) printf("return 3\n");
-	return (numbered == -2) ? res : 0; // special case for setting up numbered solutions
+	return (numbered < 0) ? res : 0; // special case for setting up numbered solutions
       }
     }
   }

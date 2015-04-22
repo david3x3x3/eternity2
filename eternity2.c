@@ -241,7 +241,7 @@ init() {
   printf("table_size = %zu\n", strlen(fit_table_buffer)+1);
 }
 
-cl_short *clplaced;
+cl_short *clplaced,*clbest;
 long solcount = 0, clsolcount=0;
 
 void print_solution(
@@ -392,7 +392,7 @@ short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit)
     //    if (depth>best) {
     //      best = depth;
     //    }
-    if (depth==maxdepth && numbered != -2 && (numbered < 0 || numbered != solcount)) {
+    if (depth==maxdepth && numbered >= 0 && numbered != solcount) {
       //found solution
       solcount++;
       if (doprint) {
@@ -403,37 +403,39 @@ short *placed, int mindepth, int maxdepth, int doprint, int numbered, int limit)
       //res++;
       depth--;
     } else {
-      row = depth/width;
-      col = depth%width;
-      down = 0;
-      right = 0;
-      if (col) {
-	k=fit_table2[placed[(depth-1)]];
-	i=pieces[k/4][(5-k%4)%4];
-	if (col == width-1) {
-	  right=1;
+      if(depth < width*height) {
+	row = depth/width;
+	col = depth%width;
+	down = 0;
+	right = 0;
+	if (col) {
+	  k=fit_table2[placed[(depth-1)]];
+	  i=pieces[k/4][(5-k%4)%4];
+	  if (col == width-1) {
+	    right=1;
+	  }
+	} else {
+	  i=0;
 	}
-      } else {
-	i=0;
-      }
-      if (row) {
-	k=fit_table2[placed[(depth-width)]];
-	j=pieces[k/4][(6-k%4)%4];
-	if (row == height-1) {
-	  down=1;
+	if (row) {
+	  k=fit_table2[placed[(depth-width)]];
+	  j=pieces[k/4][(6-k%4)%4];
+	  if (row == height-1) {
+	    down=1;
+	  }
+	} else {
+	  j=0;
 	}
-      } else {
-	j=0;
+	/* if(doprint == 2) { */
+	/* 	printf("left, up is %d, %d\n", i, j); */
+	/* } */
+	placed[depth] = fit_table1[(i*edgecount+j)*4+down*2+right]-1;
       }
-      /* if(doprint == 2) { */
-      /* 	printf("left, up is %d, %d\n", i, j); */
-      /* } */
-      placed[depth] = fit_table1[(i*edgecount+j)*4+down*2+right]-1;
 
-      if (depth==maxdepth) {
+      if (depth>=maxdepth) {
 	solcount++;
 	//if(doprint==2) printf("return 3\n");
-	return (numbered == -2) ? res : 0; // special case for setting up numbered solutions
+	return (numbered < 0) ? res : 0; // special case for setting up numbered solutions
       }
     }
   }
@@ -620,18 +622,23 @@ int clinit() {
        clplaced[i*piececount+j] = 0;
      }
    }
+   clbest = malloc(piececount*sizeof(cl_short));
+   for(j=0;j<piececount;j++) {
+     clplaced[j] = 0;
+   }
 
    return 0;
 }
 
 int
-clsearch(cl_int depth, cl_int limit) {
+clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
   cl_int err, clplaced_size=total_work_units*piececount*sizeof(cl_short);
   cl_event kernel_event;
   int *result = malloc(total_work_units*sizeof(cl_int));
   int nodes=0, i;
 
-  //printf("clsearch(depth=%d,limit=%d,clplaced_size=%d)\n", depth, limit, clplaced_size);
+  //printf("clsearch(depth=%d,max_depth=%d,limit=%d,clplaced_size=%d)\n", depth,
+  //	 max_depth, limit, clplaced_size);
 
   //printf("calling clCreateBuffer\n");
   /* Create CL buffers to hold input and output data */
@@ -658,7 +665,7 @@ clsearch(cl_int depth, cl_int limit) {
     perror("Couldn't set the kernel argument");
     exit(1);
   }
-  err = clSetKernelArg(kernel, 2, sizeof(cl_int), &piececount);
+  err = clSetKernelArg(kernel, 2, sizeof(cl_int), &max_depth);
   if (err < 0) {
     perror("Couldn't set the kernel argument");
     exit(1);
@@ -735,20 +742,30 @@ clsearch(cl_int depth, cl_int limit) {
 long
 run_clsearch(int depth, int limit, int mindepth, int toend) {
   static int count=0, active_count=0;
-  int done=0,i,j,res_depth, res;
+  int done=0,i,j,res_depth, res, maxdepth;
   static long total_nodes=0;
   time_t total_time;
 
   //printf("run_clsearch(depth=%d,limit=%d,mindepth=%d,toend=%d)\n", depth, limit, mindepth, toend);
+
+  if(best == 0) {
+    best = mindepth;
+  }
   //printf("ready to search\n");
   while(!done) {
+    if(best < piececount) {
+      maxdepth = best+1;
+    } else {
+      maxdepth = piececount;
+    }
     if(!(count%10) && !quiet) {
       total_time = time(NULL)-start_time;
-      printf("search #%d,active=%d,nodes=%ld,time=%zu,mnps=%.3f\n", count, active_count, total_nodes,total_time,
+      printf("search #%d,active=%d,nodes=%ld,time=%zu,best=%d,mnps=%.3f\n",
+	     count, active_count, total_nodes,total_time, best,
 	     total_nodes/(1000000.0*total_time));
     }
     active_count=0;
-    res = clsearch(mindepth, limit);
+    res = clsearch(mindepth, maxdepth, limit);
     //printf("searched %d nodes\n", res);
     total_nodes += res;
 
@@ -758,7 +775,7 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
     for(i=0;i<total_work_units;i++) {
       res_depth=-1;
       for(j=0;j<piececount;j++) {
-	if(clplaced[i*piececount+j] > 0) {
+	if(clplaced[i*piececount+j] > 0 && fit_table2[clplaced[i*piececount+j]] > 0) {
 	  res_depth=j;
 	} else {
 	  break;
@@ -766,11 +783,26 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
       }
       res_depth++;
       //printf("search #%d/%d depth %d\n", count, i, res_depth);
+      //print_solution_debug(clplaced+piececount*i, res_depth+2, clsolcount+1);
       if(res_depth == piececount) {
 	active_count++;
+	best = res_depth;
 	// search with match
 	printf("%d %03d ", count, i);
 	print_solution_martin(clplaced+piececount*i, res_depth, ++clsolcount);
+	if(toend) {
+	  done=0;
+	}
+      } else if(res_depth-1 > best) {
+	active_count++;
+	best = res_depth-1;
+	for(j=0;j<best;j++) {
+	  clbest[j] = clplaced[piececount*i+j];
+	}
+	if(!quiet) {
+	  printf("best ");
+	  print_solution(clbest, best, best);
+	}
 	if(toend) {
 	  done=0;
 	}
@@ -793,6 +825,10 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
   if(toend) {
     printf("search #%d,nodes=%ld,time=%zu,mnps=%.3f\n", count, total_nodes,total_time,
 	   total_nodes/(1000000.0*total_time));
+    if(best < piececount) {
+      printf("best ");
+      print_solution(clbest, best, best);
+    }
     printf("solution count = %ld\n", clsolcount);
   }
   return total_nodes;
@@ -979,10 +1015,13 @@ main(int argc, char *argv[]) {
       if (target == -2 && res == 0 && depth > 0) {
 	res = -2;
       }
-      if (res && depth >= max && argc < 2) {
+      if (depth >= max && argc < 2) {
 	if (cl) {
 	  add_clsearch(placed, depth, limit, max);
 	} else {
+	  if(depth > max) {
+	    placed[--depth] = 0;
+	  }
 	  print_solution_martin(placed, depth, solcount);
 	}
       } else {
