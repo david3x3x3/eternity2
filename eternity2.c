@@ -35,8 +35,11 @@ cl_platform_id platform;
 cl_device_id device;
 cl_context context;
 cl_command_queue queue;
+cl_mem piece_buff;
+cl_int clplaced_size;
 size_t max_workgroup_size, total_work_units;
 time_t start_time;
+cl_event ev;
 
 #include "pieces.h"
 
@@ -629,7 +632,19 @@ int clinit() {
    total_work_units = max_compute_units * max_workgroup_size;
    printf("total_work_units = %zu\n", total_work_units);
 
-   clplaced = malloc(total_work_units*piececount*sizeof(cl_short));
+   clplaced_size=total_work_units*piececount*sizeof(cl_short);
+   
+   piece_buff = clCreateBuffer(context, CL_MEM_READ_WRITE |
+			       CL_MEM_ALLOC_HOST_PTR, clplaced_size, NULL,
+			       &err);
+   clerror(err,"Couldn't create a buffer object");
+
+
+   clplaced = clEnqueueMapBuffer(queue, piece_buff, CL_TRUE, 
+				 CL_MAP_WRITE|CL_MAP_READ, 0,
+				 clplaced_size, 0, NULL, NULL, &err); 
+   clerror(err,"error with clEnqueueMapBuffer");
+
    for(i=0;i<total_work_units;i++) {
      for(j=0;j<piececount;j++) {
        clplaced[i*piececount+j] = 0;
@@ -645,8 +660,7 @@ int clinit() {
 
 int
 clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
-  cl_int err, clplaced_size=total_work_units*piececount*sizeof(cl_short);
-  cl_event kernel_event;
+  cl_int err;
   int *result = malloc(total_work_units*sizeof(cl_int));
   int nodes=0, i;
 
@@ -655,13 +669,16 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
 
   //printf("calling clCreateBuffer\n");
   /* Create CL buffers to hold input and output data */
-  cl_mem piece_buff = clCreateBuffer(context, CL_MEM_READ_WRITE |
-			      CL_MEM_COPY_HOST_PTR, clplaced_size, clplaced, &err);
-  clerror(err,"Couldn't create a buffer object");
 
   cl_mem res_buff = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
 				   total_work_units*sizeof(cl_int), NULL, &err);
   clerror(err,"Couldn't create a buffer object");
+
+  err = clEnqueueUnmapMemObject(queue, piece_buff, clplaced, 0, NULL, 
+				&ev); 
+  clerror(err,"error with clEnqueueUnmapMemObject");
+
+  err = clWaitForEvents(1, &ev);
 
   //printf("calling clSetKernelArg\n");
   /* Create kernel arguments from the CL buffers */
@@ -699,25 +716,16 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
   err = clSetKernelArg(kernel, 5, sizeof(cl_mem), &res_buff);
   clerror(err,"Couldn't set the kernel argument");
 
-
-  //printf("calling clEnqueueWriteBuffer\n");
-  err = clEnqueueWriteBuffer(queue, piece_buff, CL_TRUE, 0,
-			     clplaced_size, clplaced, 0, NULL, NULL); 
-  if (err < 0) {
-    perror("error with clEnqueueWriteBuffer");
-    exit(1);
-  }
-
   /* Enqueue the kernel to the device */
   //printf("calling clEnqueueNDRangeKernel\n");
   err = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &total_work_units,
-			       &max_workgroup_size, 0, NULL, &kernel_event);
+			       &max_workgroup_size, 0, NULL, &ev);
   if (err < 0) {
     clerror(err, "Couldn't enqueue the kernel execution command");
     exit(1);
   }
 
-  err = clWaitForEvents(1, &kernel_event);
+  err = clWaitForEvents(1, &ev);
   if(err < 0) {
     perror("Couldn't enqueue the kernel");
     exit(1);   
@@ -729,10 +737,10 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
 		      sizeof(cl_int)*total_work_units, result, 0, NULL, NULL);
   clerror(err, "Couldn't enqueue the read buffer command");
   
-  //printf("calling clEnqueueReadBuffer\n");
-  err = clEnqueueReadBuffer(queue, piece_buff, CL_TRUE, 0, clplaced_size,
-			    clplaced, 0, NULL, NULL);
-  clerror(err, "Couldn't enqueue the read buffer command");
+  clplaced = clEnqueueMapBuffer(queue, piece_buff, CL_TRUE, 
+				CL_MAP_WRITE|CL_MAP_READ, 0,
+				clplaced_size, 0, NULL, NULL, &err); 
+  clerror(err,"error with clEnqueueMapBuffer");
 
   for(i=0;i<total_work_units;i++) {
     nodes += result[i];
@@ -741,7 +749,6 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
   //printf("kernel call complete\n");
 
   /* Deallocate resources */
-  clReleaseMemObject(piece_buff);
   clReleaseMemObject(res_buff);
   free(result);
   return nodes;
@@ -1064,6 +1071,9 @@ main(int argc, char *argv[]) {
   printf("search complete\n");
 
   if (cl) {
+    clEnqueueUnmapMemObject(queue, piece_buff, clplaced, 0, NULL, &ev);
+    clWaitForEvents(1, &ev);
+    clReleaseMemObject(piece_buff);
     clReleaseKernel(kernel);
     clReleaseCommandQueue(queue);
     clReleaseProgram(program);
