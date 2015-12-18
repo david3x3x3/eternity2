@@ -27,11 +27,11 @@ int edgecount=0;
 int piececount,*placed2;
 int best=0;
 int ft_cols=15;
-int quiet=0, usecpu=0, maxwgs=0, maxcu=0, globmem=0;
+int quiet=0, usecpu=0, maxwgs=0, maxcu=0, globmem=0, platformnum=-1;
 
 cl_program program;
 cl_kernel kernel;
-cl_platform_id platform;
+cl_platform_id *platform, *platforms;
 cl_device_id device;
 cl_context context;
 cl_command_queue queue;
@@ -241,11 +241,11 @@ init() {
   sprintf(c, "}");
   c += strlen(c);
 
-  printf("table_size = %zu\n", strlen(fit_table_buffer)+1);
+  printf("table_size = %d\n", strlen(fit_table_buffer)+1);
 }
 
 cl_short *clplaced,*clbest;
-long solcount = 0, clsolcount=0;
+long long solcount = 0, clsolcount=0;
 
 void print_solution(
 #ifdef MYKERNEL
@@ -475,14 +475,42 @@ int clinit() {
    /* Data and buffers */
 
    /* Identify a platform */
-   err = clGetPlatformIDs(1, &platform, NULL);
+   cl_uint num_platforms;
+   err = clGetPlatformIDs(0, NULL, &num_platforms);
+   printf("num_platforms = %d\n", num_platforms);
+
+   platforms = calloc(num_platforms, sizeof(cl_platform_id));
+
+   err = clGetPlatformIDs(num_platforms, platforms, NULL);
+   
+   char *plat_name=NULL;
+   size_t plat_len;
+   
+   for(i=0; i<num_platforms; i++) {
+     clGetPlatformInfo(platforms[i], CL_PLATFORM_NAME, 0, plat_name, &plat_len);
+     //printf("length = %d\n", plat_len);
+     plat_name = malloc(plat_len);
+     plat_name[0] = 0;
+     clGetPlatformInfo(platforms[i], CL_PLATFORM_NAME, plat_len, plat_name, &plat_len);
+     printf("platform #%d: %s\n", i, plat_name);
+     free(plat_name);
+   }
+
+
    if (err < 0) {
      clerror(err, "Couldn't find any platforms");
      exit(1);
    }
 
+   if(platformnum < 0 || platformnum >= num_platforms) {
+     printf("please specify a valid platform number\n");
+     exit(1);
+   }
+   
+   platform = &platforms[platformnum];
+
    /* Access a device */
-   err = clGetDeviceIDs(platform, usecpu ? CL_DEVICE_TYPE_CPU : CL_DEVICE_TYPE_GPU, 1, &device, NULL);
+   err = clGetDeviceIDs(*platform, usecpu ? CL_DEVICE_TYPE_CPU : CL_DEVICE_TYPE_GPU, 1, &device, NULL);
    if (err < 0) {
      clerror(err,"Couldn't find any devices");
      exit(1);
@@ -573,7 +601,7 @@ int clinit() {
    if(maxwgs && maxwgs < max_workgroup_size) {
      max_workgroup_size = maxwgs;
    }
-   printf("max_workgroup_size = %zu\n", max_workgroup_size);
+   printf("max_workgroup_size = %d\n", max_workgroup_size);
 
    cl_ulong local_mem_size;
    err = clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &local_mem_size, NULL);
@@ -590,7 +618,7 @@ int clinit() {
      clerror(err, "clGetKernelWorkGroupInfo (preferred_work_group_size_multiple)");
      exit(1);
    }
-   printf("preferred_work_group_size_multiple = %zu\n", preferred_work_group_size_multiple);
+   printf("preferred_work_group_size_multiple = %d\n", preferred_work_group_size_multiple);
 
    cl_ulong kernel_local_mem_size;
    err = clGetKernelWorkGroupInfo(kernel, device, CL_KERNEL_LOCAL_MEM_SIZE, sizeof(cl_ulong),
@@ -618,7 +646,7 @@ int clinit() {
      // max_workgroup_size -= max_workgroup_size % preferred_work_group_size_multiple;
    }
 
-   printf("workgroup size = %zu\n", max_workgroup_size);
+   printf("workgroup size = %d\n", max_workgroup_size);
    
    cl_uint max_compute_units;
    err = clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &max_compute_units, NULL);
@@ -630,7 +658,7 @@ int clinit() {
    printf("max_compute_units = %d\n", max_compute_units);
 
    total_work_units = max_compute_units * max_workgroup_size;
-   printf("total_work_units = %zu\n", total_work_units);
+   printf("total_work_units = %d\n", total_work_units);
 
    clplaced_size=total_work_units*piececount*sizeof(cl_short);
    
@@ -763,11 +791,11 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
 // completed and there are more positions to search or if all of the
 // searches have completed.
 
-long
+long long
 run_clsearch(int depth, int limit, int mindepth, int toend) {
   static int count=0, active_count=0;
   int done=0,i,j,res, maxdepth;
-  static long total_nodes=0;
+  static long long total_nodes=0;
   time_t total_time;
 
   //printf("run_clsearch(depth=%d,limit=%d,mindepth=%d,toend=%d)\n", depth, limit, mindepth, toend);
@@ -784,9 +812,12 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
     }
     if(!(count%10) && !quiet) {
       total_time = time(NULL)-start_time;
-      printf("search #%d,active=%d,nodes=%ld,time=%zu,best=%d,mnps=%.3f\n",
-	     count, active_count, total_nodes,total_time, best,
-	     total_nodes/(1000000.0*total_time));
+      printf("status #%d,", count);
+      printf("active=%d,", active_count);
+      printf("nodes=%lld,", total_nodes);
+      printf("time=%d,", total_time);
+      printf("best=%d,", best);
+      printf("mnps=%.3f\n",total_nodes/(1000000.0*total_time));
     }
     active_count=0;
     res = clsearch(mindepth, maxdepth, limit);
@@ -804,8 +835,14 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
 	active_count++;
 	best = piececount;
 	// search with match
-	printf("%d %03d ", count, i);
-	print_solution_martin(clplaced+piececount*i, piececount, ++clsolcount);
+	if (1) {
+	  // this prints solutions subsequent to the first one
+	  printf("best ");
+	  print_solution(clplaced+piececount*i, best, best);
+	  ++clsolcount;
+	  //printf("%d %03d ", count, i);
+	  //print_solution_martin(clplaced+piececount*i, piececount, ++clsolcount);
+	}
 	if(toend) {
 	  done=0;
 	}
@@ -840,7 +877,7 @@ run_clsearch(int depth, int limit, int mindepth, int toend) {
     count++;
   }
   if(toend) {
-    printf("search #%d,nodes=%ld,time=%zu,mnps=%.3f\n", count, total_nodes,total_time,
+    printf("search #%d,nodes=%ld,time=%d,mnps=%.3f\n", count, total_nodes,total_time,
 	   total_nodes/(1000000.0*total_time));
     if(best < piececount) {
       printf("best ");
@@ -914,7 +951,7 @@ print_usage() {
 int
 main(int argc, char *argv[]) {
   int i, target, min, max, phase, cl=0, depth, limit=1000, doprint;
-  long res,total=0;
+  long long res,total=0;
   short *placed;
 
   setbuf(stdout,0);
@@ -953,6 +990,10 @@ main(int argc, char *argv[]) {
     } else if (!strcmp(argv[0], "-cpu")) {
       argc--; argv++;
       usecpu=1;
+    } else if (!strcmp(argv[0], "-platform")) {
+      argc--; argv++;
+      platformnum=atoi(argv[0]);
+      argc--; argv++;
     } else if (!strcmp(argv[0], "-globmem")) {
       argc--; argv++;
       globmem=1;
@@ -982,6 +1023,7 @@ main(int argc, char *argv[]) {
   }
 
   start_time = time(NULL);
+  printf("start_time = %d\n", start_time);
 
   placed = malloc(width*height*sizeof(cl_short));
   for (i=0;i<width*height;i++) {
@@ -1025,7 +1067,7 @@ main(int argc, char *argv[]) {
 
       //printf("%d: calling mysearch(placed,%d,%d,%d,%d,%d): \n", phase, min, max, doprint, target, limit);
       res = mysearch(placed, min, max, doprint, target, 10000000);
-      //printf("result = %ld, total = %ld, count = %ld\n", res, total, solcount);
+      //printf("result = %lld, total = %lld, count = %ld\n", res, total, solcount);
       total += res;
       for (depth=0;depth<piececount;depth++) {
 	if (placed[depth] <= 0) {
@@ -1049,7 +1091,7 @@ main(int argc, char *argv[]) {
 	if(res == -2) {
 	  res = 0;
 	}
-	printf("result = %ld, total = %ld, count = %ld\n", res, total, solcount);
+	printf("result = %I64d, total = %I64d, count = %ld\n", res, total, solcount);
       }
     } while (res);
 
@@ -1061,13 +1103,15 @@ main(int argc, char *argv[]) {
 
   if(cl) {
     total += run_clsearch(depth, limit, max, 1);
-    printf("searched %ld nodes\n", total);
+    printf("searched %lld nodes\n", total);
     solcount = clsolcount;
   }
   time_t total_time = time(NULL)-start_time;
-  printf("total = %13ld|count = %ld|time=%zu:%02zu:%02zu|mnps=%.3f|best=%d\n",
-	 total, solcount, total_time/3600, (total_time%3600)/60, total_time%60,
-	 total/(1000000.0*total_time), best);
+  printf("total = %13lld|count = %lld|", total, solcount);
+  printf("time=%d:", total_time/3600);
+  printf("%02d:", (total_time%3600)/60);
+  printf("%02d|", total_time%60);
+  printf("mnps=%.3f|best=%d\n", total/(1000000.0*total_time), best);
   printf("search complete\n");
 
   if (cl) {
