@@ -35,7 +35,7 @@ cl_platform_id *platform, *platforms;
 cl_device_id device;
 cl_context context;
 cl_command_queue queue;
-cl_mem piece_buff;
+cl_mem piece_buff, res_buff;
 cl_int clplaced_size;
 size_t max_workgroup_size, total_work_units;
 time_t start_time;
@@ -662,6 +662,10 @@ int clinit() {
 
    clplaced_size=total_work_units*piececount*sizeof(cl_short);
    
+   res_buff = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+				    total_work_units*sizeof(cl_int), NULL, &err);
+   clerror(err,"Couldn't create a buffer object");
+
    piece_buff = clCreateBuffer(context, CL_MEM_READ_WRITE |
 			       CL_MEM_ALLOC_HOST_PTR, clplaced_size, NULL,
 			       &err);
@@ -697,10 +701,6 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
 
   //printf("calling clCreateBuffer\n");
   /* Create CL buffers to hold input and output data */
-
-  cl_mem res_buff = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
-				   total_work_units*sizeof(cl_int), NULL, &err);
-  clerror(err,"Couldn't create a buffer object");
 
   err = clEnqueueUnmapMemObject(queue, piece_buff, clplaced, 0, NULL, 
 				&ev); 
@@ -777,7 +777,6 @@ clsearch(cl_int depth, cl_int max_depth, cl_int limit) {
   //printf("kernel call complete\n");
 
   /* Deallocate resources */
-  clReleaseMemObject(res_buff);
   free(result);
   return nodes;
 }
@@ -1045,7 +1044,11 @@ main(int argc, char *argv[]) {
       if (argc > 0) {
 	max = atoi(argv[0]);
       } else {
-	max = piececount;
+	if (!cl) {
+	  max = best+1;
+	} else {
+	  max = piececount;
+	}
       }
       if (argc > 1) {
 	target = atoi(argv[1]);
@@ -1082,10 +1085,19 @@ main(int argc, char *argv[]) {
 	if (cl) {
 	  add_clsearch(placed, depth, limit, max);
 	} else {
-	  if(depth > max) {
-	    placed[--depth] = 0;
+	  if(argc) {
+	    if(depth > max) {
+	      placed[--depth] = 0;
+	    }
+	    print_solution_martin(placed, depth, solcount);
+	  } else {
+	    if(depth >= best) {
+	      print_solution(placed, placed[depth]>0 ? depth : depth-1, solcount);
+	      if(depth > best) {
+		best = depth-1;
+	      }
+	    }
 	  }
-	  print_solution_martin(placed, depth, solcount);
 	}
       } else {
 	if(res == -2) {
@@ -1118,6 +1130,7 @@ main(int argc, char *argv[]) {
     clEnqueueUnmapMemObject(queue, piece_buff, clplaced, 0, NULL, &ev);
     clWaitForEvents(1, &ev);
     clReleaseMemObject(piece_buff);
+    clReleaseMemObject(res_buff);
     clReleaseKernel(kernel);
     clReleaseCommandQueue(queue);
     clReleaseProgram(program);
