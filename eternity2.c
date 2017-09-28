@@ -27,7 +27,7 @@ int edgecount=0;
 int piececount,*placed2;
 int best=0;
 int ft_cols=15;
-int quiet=0, usecpu=0, maxwgs=0, maxcu=0, globmem=0, platformnum=-1;
+int quiet=0, usecpu=0, maxwgs=0, maxcu=0, globmem=0, platformnum=-1, gen1, gen2, gen3, do_gen=0;
 
 cl_program program;
 cl_kernel kernel;
@@ -138,7 +138,7 @@ init() {
       }
     }
   }
-  printf("edgecount = %d\n",edgecount);
+  printf("//edgecount = %d\n",edgecount);
   fit_table0 = malloc(edgecount*edgecount*4*ft_cols*sizeof(int));
 
   for (i=0;i<edgecount*edgecount*4;i++) {
@@ -160,7 +160,7 @@ init() {
       }
     }
   }
-  printf("maxm = %d\n", maxm);
+  printf("//maxm = %d\n", maxm);
 
   fit_table2_size=3;
   // calculate fit_table2 size
@@ -241,7 +241,7 @@ init() {
   sprintf(c, "}");
   c += strlen(c);
 
-  printf("table_size = %d\n", strlen(fit_table_buffer)+1);
+  printf("//table_size = %d\n", strlen(fit_table_buffer)+1);
 }
 
 cl_short *clplaced,*clbest;
@@ -955,7 +955,7 @@ main(int argc, char *argv[]) {
 
   setbuf(stdout,0);
 
-  printf("args: ");
+  printf("//args: ");
   for(i=0;i<argc;i++) {
     printf("%s ", argv[i]);
   }
@@ -996,6 +996,15 @@ main(int argc, char *argv[]) {
     } else if (!strcmp(argv[0], "-globmem")) {
       argc--; argv++;
       globmem=1;
+    } else if (!strcmp(argv[0], "-gen")) {
+      argc--; argv++;
+      gen1=atoi(argv[0]);
+      argc--; argv++;
+      gen2=atoi(argv[0]);
+      argc--; argv++;
+      gen3=atoi(argv[0]);
+      argc--; argv++;
+      do_gen=1;
     } else {
       printf("unknown option %s\n", argv[0]);
       print_usage();
@@ -1019,6 +1028,11 @@ main(int argc, char *argv[]) {
 
   if (cl) {
     clinit();
+  }
+
+  if (do_gen) {
+    gen(gen1, gen2, gen3);
+    exit(0);
   }
 
   start_time = time(NULL);
