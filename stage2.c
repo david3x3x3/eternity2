@@ -21,7 +21,7 @@ time_t start_time;
 // piece order is clockwise
 // rotation 0 order is URDL
 
-int *board, *placed, width, height, size, best;
+int *board, *placed, width, height, size, best, bad_pieces[256];
 long long nodes;
 
 void
@@ -50,27 +50,29 @@ int *rand_order,min_depth=999,max_depth=0;
 long long int last_203 = 0;
 
 int
-search(int depth, int bad, int maxbad) {
+search(int depth, int wrong, int bad) {
   int row, col, *ptr, num, numr, rot, i, ok;
   int left, up, down, right, n_l_r, n_u_d, at_right, at_bottom;
-  int row2, col2, num2, rot2, thisbad, at_edge;
-  /* printf("search(%d,%d,%d)\n", depth, bad, maxbad); */
+  int row2, col2, num2, rot2, thiswrong, at_edge, maxwrong;
+  /* printf("search(%d,%d,%d)\n", depth, wrong, maxwrong); */
 
-  /* if(bad > maxbad) { */
-  /*   /\* printf("too many bad pieces\n"); *\/ */
+  /* if(wrong > maxwrong) { */
+  /*   /\* printf("too many wrong pieces\n"); *\/ */
   /*   return 0; */
   /* } */
 
   if(depth < 203) {
-    maxbad = 0;
+    maxwrong = 0;
   } else if(depth < 218) {
-    maxbad = 3;
-  } else if(depth < 230) {
-    maxbad = 8;
+    maxwrong = 3;
+  } else if(depth < 226) {
+    maxwrong = 6;
+  } else if(depth < 234) {
+    maxwrong = 9;
   } else if(depth < 241) {
-    maxbad = 14;
+    maxwrong = 13;
   } else {
-    maxbad = 19;
+    maxwrong = 18;
   }
 
   nodes++;
@@ -94,11 +96,23 @@ search(int depth, int bad, int maxbad) {
     return 0;
   }
 
+  if((depth >= 16 && bad < 1) ||
+     (depth >= 32 && bad < 5) ||
+     (depth >= 48 && bad < 15) ||
+     (depth >= 64 && bad < 25) ||
+     (depth >= 80 && bad < 30) ||
+     (depth >= 96 && bad < 35) ||
+     (depth >= 112 && bad < 40) ||
+     (depth >= 128 && bad < 43) ||
+     (depth >= 144 && bad < 45)) {
+    return 0;
+  }
+
   if(depth >= 203) last_203 = nodes;
 
-  if(depth >= best) {
+  if(depth > best) {
     best = depth;
-    printf("best solution %d-%d: ", depth, bad);
+    printf("best solution %d-%d: ", depth, wrong);
     printboard();
   }
   if(depth == width*height) {
@@ -150,7 +164,7 @@ search(int depth, int bad, int maxbad) {
 
     for(rot=0;rot<4;rot++) {
       /* printf("trying orientation %d\n", rot); */
-      thisbad=0;
+      thiswrong=0;
       up    = p->pieces[num][(0+4-rot)%4];
       right = p->pieces[num][(1+4-rot)%4];
       down  = p->pieces[num][(2+4-rot)%4];
@@ -159,29 +173,29 @@ search(int depth, int bad, int maxbad) {
 	 ((col == 0) != (left == 0)) ||
 	 (at_right != (right == 0)) ||
 	 (at_bottom != (down == 0))) {
-	/* printf("bad edge status\n"); */
+	/* printf("wrong edge status\n"); */
 	continue;
       }
 
-      /* if((row == 0) != (up == 0)) {printf("bad edge status up\n"); continue;} */
-      /* if((col == 0) != (left == 0)) {printf("bad edge status left\n"); continue;} */
-      /* if((at_right != (right == 0))) {printf("bad edge status right\n"); continue;} */
-      /* if(at_bottom != (down == 0)) {printf("bad edge status down\n"); continue;} */
+      /* if((row == 0) != (up == 0)) {printf("wrong edge status up\n"); continue;} */
+      /* if((col == 0) != (left == 0)) {printf("wrong edge status left\n"); continue;} */
+      /* if((at_right != (right == 0))) {printf("wrong edge status right\n"); continue;} */
+      /* if(at_bottom != (down == 0)) {printf("wrong edge status down\n"); continue;} */
 
       if(left != n_l_r) {
-	thisbad++;
+	thiswrong++;
       }
       if(up != n_u_d) {
-	thisbad++;
+	thiswrong++;
       }
-      if(bad+thisbad > maxbad) {
+      if(wrong+thiswrong > maxwrong) {
 	continue;
       }
       /* printf("placing %d/%d\n", num, rot); */
       board[row*width*2+col*2+0] = num;
       board[row*width*2+col*2+1] = rot;
       placed[num]=1;
-      if(search(depth+1,bad+thisbad,maxbad)) {
+      if(search(depth+1,wrong+thiswrong, bad+bad_pieces[num])) {
 	return 1;
       }
       /* printf("removing %d/%d\n", num, rot); */
@@ -196,7 +210,7 @@ search(int depth, int bad, int maxbad) {
 int
 main(int argc, char *argv[]) {
   char puzname[64], buf[64], *s;
-  int piececount, i,j,k, row, col, maxbad;
+  int piececount, i,j,k, row, col, bad;
   
   start_time = time(NULL);
   setbuf(stdout, 0);
@@ -263,17 +277,22 @@ main(int argc, char *argv[]) {
   }
   printf("\n");
   printboard();
-  for(maxbad=0;;maxbad++) {
-    if(maxbad==1) {
-      continue; // there will never be one mismatch
+
+  for(i=0;i<size;i++) {
+    bad=0;
+    for(j=0;j<4;j++) {
+      if(p->pieces[i][j] == 17) {
+	bad=1;
+	break;
+      }
     }
-    best=0;
-    nodes=0;
-    if(search(piececount, 0, maxbad)) {
-      printf("\nfound solution with score %d\n",(width-1)*height+width*(height-1)-maxbad);
-      break;
+    if(bad) {
+      printf("piece %d is bad\n", i);
     }
-    printf("\nno solution with maxbad = %d (best = %d, nodes = %lld)\n", maxbad, best, nodes);
+    bad_pieces[i] = bad;
   }
+  best=0;
+  nodes=0;
+  search(piececount, 0, 0);
   exit(0);
 }
