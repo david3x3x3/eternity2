@@ -1,5 +1,5 @@
 __constant short fit_table1[] = { PYFITTABLE1 };
-__constant short fit_table2[] = { PYFITTABLE2 };
+__constant short fit_table2[][2] = { PYFITTABLE2 };
 
 #define WIDTH KWIDTH
 #define HEIGHT KHEIGHT
@@ -10,7 +10,7 @@ __constant short width = WIDTH, height = HEIGHT, edgecount = PYEDGECOUNT;
 __constant short pieces[][4] = { PYPIECES };
 
 long mysearch(MEMTYPE short *placed, int mindepth, int limit) {
-  int i,j,k,down,right,depth=-1;
+  int i,j,k,depth=-1;
   long res=0;
   short placed2[WIDTH*HEIGHT];
 
@@ -21,10 +21,11 @@ long mysearch(MEMTYPE short *placed, int mindepth, int limit) {
     }
   }
   for (i=0;i<=depth;i++) {
-    if (placed[i] > 0) {
-      j = fit_table2[placed[i]];
+    k = placed[i];
+    if (k > 0) {
+      j = fit_table2[k][0];
       if (j >= 0) {
-	placed2[j/4]++;
+	placed2[j]++;
       }
     }
   }
@@ -32,17 +33,18 @@ long mysearch(MEMTYPE short *placed, int mindepth, int limit) {
   while (depth >= mindepth) {
     i = placed[depth];
 
-    if (fit_table2[i] >= 0) {
-      placed2[fit_table2[i]/4]--;
+    j = fit_table2[i][0];
+    if (j >= 0) {
+      placed2[j]--;
     }
     i = ++placed[depth];
-    if (fit_table2[i] == -1) {
+    if (fit_table2[i][0] == -1) {
       placed[depth] = 0;
       depth--;
       continue;
     }
 
-    if (++placed2[fit_table2[i]/4] > 1) {
+    if (++placed2[fit_table2[i][0]] > 1) {
       continue;
     }
 
@@ -54,15 +56,15 @@ long mysearch(MEMTYPE short *placed, int mindepth, int limit) {
     depth++;
 
     if(depth < width*height) {
-      k=fit_table2[placed[(depth-1)]];
-      i=pieces[k/4][(5-k%4)%4];
-      right=((depth+1)%width==0);
+      k = placed[(depth-1)];
+      i=pieces[fit_table2[k][0]][(5-fit_table2[k][1])&3];
 
-      k=fit_table2[placed[(depth-width)]];
-      j=pieces[k/4][(6-k%4)%4];
-      down=(depth >= WIDTH*(HEIGHT-1));
+      k = placed[(depth-width)];
+      j=pieces[fit_table2[k][0]][(6-fit_table2[k][1])&3];
 
-      placed[depth] = fit_table1[(i*edgecount+j)*4+down*2+right]-1;
+      placed[depth] = fit_table1[(i*edgecount+j)*4+
+				 (depth >= WIDTH*(HEIGHT-1))*2+
+				 ((depth+1)%width==0)]-1;
     } else {
       return res;
     }

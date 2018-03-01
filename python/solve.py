@@ -66,12 +66,12 @@ for key1, val in pieces.items():
 
 fit1 = [1]*edgecount*edgecount*4
 fit2 = [None]*3
-fit2c = [-1]*3
+fit2c = ["{-1,0}"]*3
 dummypos = -10
 for f in sorted(fit):
     # print('f = ' + str(f))
     # print('  ' + str(fit[f]))
-    f3 = [f2[0]*4+f2[1] for f2 in fit[f]]
+    f3 = ['{'+str(f2[0])+','+str(f2[1])+'}' for f2 in fit[f]]
     # left, up, down, right
     pos = ((f[1]*edgecount+f[0])*2+f[3])*2+f[2]
     if f[2] and f[3]:
@@ -81,7 +81,7 @@ for f in sorted(fit):
     if len(f3) > 0:
         fit1[pos] = len(fit2)
         fit2 = fit2 + fit[f] + [None]
-        fit2c = fit2c + f3 + [-1]
+        fit2c = fit2c + f3 + ['{-1,0}']
     else:
         fit1[pos] = 2
 
