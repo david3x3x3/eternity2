@@ -1,5 +1,5 @@
 __constant short fit_table1[] = { PYFITTABLE1 };
-__constant short fit_table2[][2] = { PYFITTABLE2 };
+__constant char fit_table2[][2] = { PYFITTABLE2 };
 
 #define WIDTH KWIDTH
 #define HEIGHT KHEIGHT

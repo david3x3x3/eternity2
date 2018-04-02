@@ -100,14 +100,14 @@ prgsrc = prgsrc.replace('KWIDTH',str(width))
 prgsrc = prgsrc.replace('KHEIGHT',str(height))
 
 #print('src = ' + prgsrc)
-prog = cl.Program(ctx, prgsrc).build()
+prog = cl.Program(ctx, prgsrc).build(options=['-cl-mad-enable','-cl-fast-relaxed-math'])
 kernel = prog.mykernel
 print(kernel)
 
 print('kernel.LOCAL_MEM_SIZE = ' + str(kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)))
       
-print('fit1 = ' + str(fit1))
-print('fit2 = ' + str(fit2))
+#print('fit1 = ' + str(fit1))
+#print('fit2 = ' + str(fit2))
 
 def mysearch(placed, mindepth, maxdepth):
     count=0
@@ -195,13 +195,23 @@ print('node limit = ' + str(node_limit))
 
 start_time = time.time()
 
-work_counter=0
-def next_work_item(pdarray, offset):
-    global nodes, placed, more_work, limit, width, work_counter
+class batch(object):
+    def __init__(self):
+        self.piece_data = None
+        self.piece_buffer = None
+        self.done = False
 
+work_counter=0
+def next_work_item(work, offset):
+    global nodes, placed, limit, width, work_counter, more_work
+
+    pdarray = work.piece_data
+    #print('searching...', flush=True)
     nodes += mysearch(placed, 0, limit)
     pos_copy = placed[width:]
+    #print('next work item: {}'.format(pos_copy),flush=True)
     if len(pos_copy) <= width:
+        print('no more work')
         pdarray[offset] = 0
         more_work = False
         return False
@@ -212,41 +222,49 @@ def next_work_item(pdarray, offset):
     work_counter += 1
     return True
 
-piece_data = np.array([0]*width*height*wgs*cu, np.int16)
-
 more_work = True
-work_item = 0
-while work_item < wgs*cu:
-    #print('search #' + str(work_item))
-    if not next_work_item(piece_data, work_item*width*height):
-        break
-    work_item += 1
+work = [batch(), batch()]
+for i in range(2):
+    print('buffer {}'.format(i), flush=True)
+    work[i].piece_data = np.array([0]*width*height*wgs*cu, np.int16)
+
+    #work[i].more_work = True
+    work_item = 0
+    while more_work and work_item < wgs*cu:
+        #print('search #' + str(work_item), flush=True)
+        if not next_work_item(work[i], work_item*width*height):
+            more_work = False
+            break
+        work_item += 1
+
+    work[i].piece_buffer = \
+        cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                  hostbuf=work[i].piece_data)
 
 res_data = np.array([0]*wgs*cu, np.int32)
 res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
-#                       hostbuf=res_data)
-
-piece_buffer = cl.Buffer(ctx,
-                         cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                         hostbuf=piece_data)
 
 solcount = 0
 calls = 0
+workpos = 0
+
 while True:
-    prog.mykernel(queue, (cu*wgs,), (wgs,), piece_buffer, np.int32(limit),
-                  np.int32(width*height), np.int32(node_limit), lm, res_buffer)
+    timing_data = [ time.time() ]
+    prog.mykernel(queue, (cu*wgs,), (wgs,), work[workpos].piece_buffer,
+                  np.int32(limit), np.int32(width*height),
+                  np.int32(node_limit), lm, res_buffer)
+    timing_data += [ time.time() ]
     calls += 1
 
-    cl.enqueue_read_buffer(queue, piece_buffer, piece_data).wait()
-    cl.enqueue_read_buffer(queue, res_buffer, res_data).wait()
+    w1 = work[workpos]
+    w2 = work[(workpos + 1) % 2]
 
-    done = True
-    last_nodes = 0
+    w2.done = True
+
     for i in range(wgs*cu):
-        last_nodes += int(res_data[i])
         offset = i*width*height
         offset2 = (i+1)*width*height
-        pd2 = piece_data[offset:offset2]
+        pd2 = w2.piece_data[offset:offset2]
         #print('pd2', pd2)
 
         zeros = np.where(pd2 == 0)[0]
@@ -254,20 +272,38 @@ while True:
             #print('solution', ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]]))
             #sys.stdout.flush()
             solcount += 1
-            done = False
+            w2.done = False
         elif zeros[0] <= limit:
-            piece_data[offset] = 0
+            w2.piece_data[offset] = 0
             if more_work:
-                if next_work_item(piece_data, offset):
-                    done = False
+                if next_work_item(w2, offset):
+                    w2.done = False
         else:
-            done = False
-    nodes += last_nodes
-    if calls % 10 == 0:
-        print('nodes = ' + str(nodes) + ', solcount = ' + str(solcount) + ', rate = ' + str((nodes/(time.time()-start_time))/1000000))
-        print('efficiency = ' + str(((last_nodes/(wgs*cu))/node_limit)*100))
-        sys.stdout.flush()
-    if done:
+            w2.done = False
+
+    if w1.done and w2.done:
         break
-    cl.enqueue_write_buffer(queue, piece_buffer, piece_data).wait()
-print('done nodes = ' + str(nodes) + ', solcount = ' + str(solcount) + ', rate = ' + str((nodes/(time.time()-start_time))/1000000))
+    timing_data += [ time.time() ]
+
+    cl.enqueue_read_buffer(queue, w1.piece_buffer,
+                           w1.piece_data).wait()
+    cl.enqueue_read_buffer(queue, res_buffer, res_data).wait()
+
+    for i in range(wgs*cu):
+        nodes += int(res_data[i])
+    if calls % 10 == 0:
+        print('nodes = ' + str(nodes) + ', solcount = ' + str(solcount) +
+              ', rate = ' + str((nodes/(time.time()-start_time))/1000000))
+        sys.stdout.flush()
+    timing_data += [ time.time() ]
+
+    cl.enqueue_write_buffer(queue, w2.piece_buffer, w2.piece_data).wait()
+    timing_data += [ time.time() ]
+
+    deltas = [timing_data[x+1]-timing_data[x]
+              for x in range(len(timing_data)-1)]
+    #print([x*100.0/sum(deltas) for x in deltas])
+    workpos = (workpos + 1) % 2
+
+print('done nodes = ' + str(nodes) + ', solcount = ' + str(solcount) +
+      ', rate = ' + str((nodes/(time.time()-start_time))/1000000))
