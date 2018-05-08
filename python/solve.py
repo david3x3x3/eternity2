@@ -3,6 +3,9 @@ import sys
 import pyopencl as cl
 import numpy as np
 import time
+import os
+#os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
+#os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
 for i in range(len(cl.get_platforms())):
     p = cl.get_platforms()[i]
@@ -38,6 +41,7 @@ queue = cl.CommandQueue(ctx)
 
 edgecount = 0
 
+# read the piece definition file
 fp=open(sys.argv[1],'r')
 width, height = list(map(int,fp.readline().strip('\n').split(' ')))
 pieces = dict()
@@ -54,6 +58,7 @@ for line in fp.read().splitlines():
 print(pypieces)
 print('edgecount = ' + str(edgecount))
 fp.close()
+
 fit = dict()
 for key1, val in pieces.items():
     if val[0] == 0 and val[3] == 0 and key1[0] != 0:
@@ -102,12 +107,12 @@ prgsrc = prgsrc.replace('KHEIGHT',str(height))
 #print('src = ' + prgsrc)
 prog = cl.Program(ctx, prgsrc).build()
 kernel = prog.mykernel
-print(kernel)
+#print(kernel)
 
 print('kernel.LOCAL_MEM_SIZE = ' + str(kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)))
       
-print('fit1 = ' + str(fit1))
-print('fit2 = ' + str(fit2))
+#print('fit1 = ' + str(fit1))
+#print('fit2 = ' + str(fit2))
 
 def mysearch(placed, mindepth, maxdepth):
     count=0
@@ -169,6 +174,9 @@ maxcu = device.max_compute_units
 wgs = device.local_mem_size//(width*height*2)
 if device.max_work_group_size < wgs:
     wgs = device.max_work_group_size
+if wgs > 100:
+    # sometimes this estimate is off, and we run out of memory
+    wgs -= 1
 print('wgs = ' + str(wgs))
 cu = device.max_compute_units
 print('cu = ' + str(cu))
@@ -195,79 +203,113 @@ print('node limit = ' + str(node_limit))
 
 start_time = time.time()
 
-work_counter=0
-def next_work_item(pdarray, offset):
-    global nodes, placed, more_work, limit, width, work_counter
-
+pos_list = []
+while True:
     nodes += mysearch(placed, 0, limit)
     pos_copy = placed[width:]
     if len(pos_copy) <= width:
-        pdarray[offset] = 0
-        more_work = False
-        return False
-    del placed[-1:]
-    for i in range(len(pos_copy)):
-        pdarray[offset+i] = pos_copy[i]
-    pdarray[len(pos_copy)] = 0
-    work_counter += 1
-    return True
-
-piece_data = np.array([0]*width*height*wgs*cu, np.int16)
-
-more_work = True
-work_item = 0
-while work_item < wgs*cu:
-    #print('search #' + str(work_item))
-    if not next_work_item(piece_data, work_item*width*height):
         break
-    work_item += 1
+    pos_list += [pos_copy]
+    del placed[-1:]
+#print('{}: placed = {}'.format(len(pos_list), pos_list))
 
-res_data = np.array([0]*wgs*cu, np.int32)
-res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
-#                       hostbuf=res_data)
+piece_data = np.array([0]*width*height*len(pos_list), np.int16)
+#print('START pos_list')
+for i in range(len(pos_list)):
+    pos = pos_list[i]
+    #print('{}: {}'.format(i,pos))
+    offset = width*height*i
+    for j in range(len(pos)):
+        piece_data[offset+j] = pos[j]
+    pos[limit] = -1
+#print('END pos_list')
+worker_pos = np.array([0]*wgs*cu, np.int32)
+for i in range(wgs*cu):
+    worker_pos[i] = i
 
 piece_buffer = cl.Buffer(ctx,
                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
                          hostbuf=piece_data)
 
+worker_buffer = cl.Buffer(ctx,
+                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                          hostbuf=worker_pos)
+
+# len(pos_list) is just a guess at the max results per kernel run
+found_data = np.array([0]*width*height*100, np.int16)
+found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY,
+                         len(pos_list)*width*height*2)
+
+nfound_data = np.array([0], np.int32)
+nfound_buffer = cl.Buffer(ctx,
+                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                          hostbuf=nfound_data)
+
+nassign_data = np.array([wgs*cu], np.int32)
+nassign_buffer = cl.Buffer(ctx,
+                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                          hostbuf=nassign_data)
+
+res_data = np.array([0]*wgs*cu, np.int32)
+res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
+
 solcount = 0
 calls = 0
+solutions = 0
+max_found = 0
+
+start_time = time.time()
+
 while True:
-    prog.mykernel(queue, (cu*wgs,), (wgs,), piece_buffer, np.int32(limit),
-                  np.int32(width*height), np.int32(node_limit), lm, res_buffer)
+    prog.mykernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
+                  np.int32(len(pos_list)), nassign_buffer, found_buffer,
+                  nfound_buffer, np.int32(limit), np.int32(width*height),
+                  np.int32(node_limit), lm, res_buffer)
     calls += 1
-
-    cl.enqueue_read_buffer(queue, piece_buffer, piece_data).wait()
+    cl.enqueue_read_buffer(queue, piece_buffer, piece_data)
+    cl.enqueue_read_buffer(queue, worker_buffer, worker_pos)
+    cl.enqueue_read_buffer(queue, nassign_buffer, nassign_data)
+    #cl.enqueue_read_buffer(queue, found_buffer, found_data)
+    cl.enqueue_read_buffer(queue, nfound_buffer, nfound_data)
     cl.enqueue_read_buffer(queue, res_buffer, res_data).wait()
-
-    done = True
+    if nassign_data[0] > len(pos_list):
+        nassign_data[0] = len(pos_list)
     last_nodes = 0
     for i in range(wgs*cu):
         last_nodes += int(res_data[i])
-        offset = i*width*height
-        offset2 = (i+1)*width*height
-        pd2 = piece_data[offset:offset2]
-        #print('pd2', pd2)
-
-        zeros = np.where(pd2 == 0)[0]
-        if len(zeros) == 0:
-            #print('solution', ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]]))
-            #sys.stdout.flush()
-            solcount += 1
-            done = False
-        elif zeros[0] <= limit:
-            piece_data[offset] = 0
-            if more_work:
-                if next_work_item(piece_data, offset):
-                    done = False
-        else:
-            done = False
+    if last_nodes == 0:
+        break
     nodes += last_nodes
     if calls % 10 == 0:
-        print('nodes = ' + str(nodes) + ', solcount = ' + str(solcount) + ', rate = ' + str((nodes/(time.time()-start_time))/1000000))
-        print('efficiency = ' + str(((last_nodes/(wgs*cu))/node_limit)*100))
-        sys.stdout.flush()
-    if done:
-        break
-    cl.enqueue_write_buffer(queue, piece_buffer, piece_data).wait()
-print('done nodes = ' + str(nodes) + ', solcount = ' + str(solcount) + ', rate = ' + str((nodes/(time.time()-start_time))/1000000))
+        status = 'calls={}'.format(calls)
+        status += ',nodes={}'.format(nodes)
+        status += ',found={}'.format(nfound_data[0]+solutions)
+        status += ',remain={}/{}'.format(nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0])
+        status += ',rate={0:.2f}'.format(nodes/1000000/(time.time()-start_time))
+        status += ',time={0:.0f}'.format(time.time()-start_time)
+        # rate2 is number of assignments completed per second
+        rate2 = (nassign_data[0]-wgs*cu)/(time.time()-start_time)
+        status += ',rate2={0:.3f}'.format(rate2)
+        # remain2 is number of days left based on remaining assignments and rate2
+        remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
+        status += ',remain2={0:.2f}'.format(remain2)
+        print(status, flush=True)
+    if nfound_data[0] > 0:
+        cl.enqueue_read_buffer(queue, found_buffer, found_data).wait()
+        if nfound_data[0] > max_found:
+            max_found = nfound_data[0]
+    for i in range(nfound_data[0]):
+        offset = i*width*height
+        offset2 = (i+1)*width*height
+        pd2 = found_data[offset:offset2]
+        #print('pd2 = {}'.format(pd2))
+        solutions += 1
+        print('solution {}: {}'.format(solutions,' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]])))
+    nfound_data[0] = 0
+    cl.enqueue_write_buffer(queue, piece_buffer, piece_data)
+    cl.enqueue_write_buffer(queue, nassign_buffer, nassign_data)
+    cl.enqueue_write_buffer(queue, nfound_buffer, nfound_data)
+    
+print('nodes = {}'.format(nodes))
+print('num solutions = {}'.format(solutions))
+print('max_found = {}'.format(max_found))
