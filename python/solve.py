@@ -37,10 +37,13 @@ print("Device max work item sizes:", device.max_work_item_sizes)
 sys.stdout.flush()
 
 ctx = cl.Context([device])
+print('ctx = {}'.format(ctx))
 queue = cl.CommandQueue(ctx)
+print('queue = {}'.format(queue))
 
 edgecount = 0
 
+#print('reading piece data')
 # read the piece definition file
 fp=open(sys.argv[1],'r')
 width, height = list(map(int,fp.readline().strip('\n').split(' ')))
@@ -55,7 +58,7 @@ for line in fp.read().splitlines():
     for rot in range(4):
         pieces[(piecenum,rot)] = t1[-rot:] + t1[:-rot]
     piecenum += 1
-print(pypieces)
+#print(pypieces)
 print('edgecount = ' + str(edgecount))
 fp.close()
 
@@ -167,7 +170,7 @@ def mysearch(placed, mindepth, maxdepth):
         if len(placed) > width+maxdepth:
             return nodes
         
-    print('count = ' + str(count))
+    #print('count = ' + str(count))
     return nodes
 
 maxcu = device.max_compute_units
@@ -181,6 +184,7 @@ print('wgs = ' + str(wgs))
 cu = device.max_compute_units
 print('cu = ' + str(cu))
 lm = cl.LocalMemory(wgs*(width*height*2))
+print('total workers = %d' % (wgs*cu))
 
 # which pieces are in each location. we put a row of blank pieces at
 # the top so that we can always match the piece above the current one,
@@ -188,30 +192,47 @@ lm = cl.LocalMemory(wgs*(width*height*2))
 placed = [dummypos]*width+[2]
 nodes = 0
 
-print(len(sys.argv))
-if len(sys.argv) > 2:
-    limit=int(sys.argv[2])
-else:
-    limit = width*height
-print('depth limit = ' + str(limit))
+i = 2
 
-if len(sys.argv) > 3:
-    node_limit=int(sys.argv[3])
+if len(sys.argv) > 2:
+    node_limit=int(sys.argv[i])
+    i += 1
 else:
     node_limit = 10000
 print('node limit = ' + str(node_limit))
 
+if len(sys.argv) > 3:
+    limit=int(sys.argv[i])
+    i += 1
+else:
+    limit = width*height
+print('depth limit = ' + str(limit))
+
 start_time = time.time()
 
 pos_list = []
+depth=0
 while True:
-    nodes += mysearch(placed, 0, limit)
-    pos_copy = placed[width:]
-    if len(pos_copy) <= width:
+    while True:
+        #print('mysearch(placed, %d, %d)' % (depth, limit))
+        nodes += mysearch(placed, depth, limit)
+        pos_copy = placed[width:]
+        #print('pos copy len = %d' % len(pos_copy))
+        if len(pos_copy) <= limit:
+            break
+        pos_list += [pos_copy]
+        del placed[-1:]
+    print("%d positions found with depth %d" % (len(pos_list), depth))
+    if len(sys.argv) > i:
+        depth = limit
+        placed = [dummypos]*width + pos_list[int(sys.argv[i])]
+        i += 1
+        limit = int(sys.argv[i])
+        i += 1
+        pos_list = []
+    else:
         break
-    pos_list += [pos_copy]
-    del placed[-1:]
-#print('{}: placed = {}'.format(len(pos_list), pos_list))
+#print('{}: pos_list = {}'.format(len(pos_list), pos_list))
 
 piece_data = np.array([0]*width*height*len(pos_list), np.int16)
 #print('START pos_list')
@@ -266,12 +287,12 @@ while True:
                   nfound_buffer, np.int32(limit), np.int32(width*height),
                   np.int32(node_limit), lm, res_buffer)
     calls += 1
-    cl.enqueue_read_buffer(queue, piece_buffer, piece_data)
-    cl.enqueue_read_buffer(queue, worker_buffer, worker_pos)
-    cl.enqueue_read_buffer(queue, nassign_buffer, nassign_data)
-    #cl.enqueue_read_buffer(queue, found_buffer, found_data)
-    cl.enqueue_read_buffer(queue, nfound_buffer, nfound_data)
-    cl.enqueue_read_buffer(queue, res_buffer, res_data).wait()
+    cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
+    cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
+    cl._enqueue_read_buffer(queue, nassign_buffer, nassign_data)
+    #cl._enqueue_read_buffer(queue, found_buffer, found_data)
+    cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
+    cl._enqueue_read_buffer(queue, res_buffer, res_data).wait()
     if nassign_data[0] > len(pos_list):
         nassign_data[0] = len(pos_list)
     last_nodes = 0
@@ -283,6 +304,7 @@ while True:
     if calls % 10 == 0:
         status = 'calls={}'.format(calls)
         status += ',nodes={}'.format(nodes)
+        status += ',active={}/{}'.format(nassign_data[0],len(pos_list))
         status += ',found={}'.format(nfound_data[0]+solutions)
         status += ',remain={}/{}'.format(nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0])
         status += ',rate={0:.2f}'.format(nodes/1000000/(time.time()-start_time))
@@ -295,7 +317,7 @@ while True:
         status += ',remain2={0:.2f}'.format(remain2)
         print(status, flush=True)
     if nfound_data[0] > 0:
-        cl.enqueue_read_buffer(queue, found_buffer, found_data).wait()
+        cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
         if nfound_data[0] > max_found:
             max_found = nfound_data[0]
     for i in range(nfound_data[0]):
@@ -306,9 +328,9 @@ while True:
         solutions += 1
         print('solution {}: {}'.format(solutions,' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]])))
     nfound_data[0] = 0
-    cl.enqueue_write_buffer(queue, piece_buffer, piece_data)
-    cl.enqueue_write_buffer(queue, nassign_buffer, nassign_data)
-    cl.enqueue_write_buffer(queue, nfound_buffer, nfound_data)
+    cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
+    cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
+    cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
     
 print('nodes = {}'.format(nodes))
 print('num solutions = {}'.format(solutions))
