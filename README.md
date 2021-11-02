@@ -30,3 +30,7 @@ your hardware, this may take a few hours to complete.
 ```
 
 This does the same thing but uses the GPU instead of the CPU.
+
+There's a newer Python version of the program in the python folder
+which is more efficient, but not as configurable from the command
+line.

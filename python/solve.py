@@ -14,7 +14,7 @@ for i in range(len(cl.get_platforms())):
         d = p.get_devices()[j]
         print('  Device ' + str(j) + ': ' + str(d.name) + ' (' + str(d.type) + ')')
 
-platform = cl.get_platforms()[1]
+platform = cl.get_platforms()[0]
 device = platform.get_devices()[0]
 
 print(platform)
@@ -58,7 +58,7 @@ for line in fp.read().splitlines():
     for rot in range(4):
         pieces[(piecenum,rot)] = t1[-rot:] + t1[:-rot]
     piecenum += 1
-#print(pypieces)
+#print('pypieces = ' + str(pypieces))
 print('edgecount = ' + str(edgecount))
 fp.close()
 
@@ -97,6 +97,7 @@ fp = open('eternity2_kernel.cl','r')
 prgsrc = fp.read()
 fp.close()
 
+#print('fit1 =', fit1)
 #print('fit2c =', fit2c)
 prgsrc = prgsrc.replace('KMEMTYPE','local')
 prgsrc = prgsrc.replace('KGLOBMEM','0')
@@ -190,7 +191,7 @@ print('total workers = %d' % (wgs*cu))
 # the top so that we can always match the piece above the current one,
 # even in the top row.
 placed = [dummypos]*width+[2]
-nodes = 0
+nodes1 = 0
 
 i = 2
 
@@ -208,19 +209,20 @@ else:
     limit = width*height
 print('depth limit = ' + str(limit))
 
-start_time = time.time()
+start_time = int(time.time())
 
 pos_list = []
 depth=0
 while True:
     while True:
         #print('mysearch(placed, %d, %d)' % (depth, limit))
-        nodes += mysearch(placed, depth, limit)
+        nodes1 += mysearch(placed, depth, limit)
         pos_copy = placed[width:]
         #print('pos copy len = %d' % len(pos_copy))
         if len(pos_copy) <= limit:
             break
-        pos_list += [pos_copy]
+        if len(sys.argv) > i or placed[-1] != 0:
+            pos_list += [pos_copy]
         del placed[-1:]
     print("%d positions found with depth %d" % (len(pos_list), depth))
     if len(sys.argv) > i:
@@ -244,9 +246,20 @@ for i in range(len(pos_list)):
         piece_data[offset+j] = pos[j]
     pos[limit] = -1
 #print('END pos_list')
+
+nassign_data = np.array([1], np.int32)
+
 worker_pos = np.array([0]*wgs*cu, np.int32)
 for i in range(wgs*cu):
-    worker_pos[i] = i
+    if i > len(pos_list):
+        worker_pos[i] = -1
+    else:
+        worker_pos[i] = i
+        nassign_data[0] = i+1
+
+nassign_buffer = cl.Buffer(ctx,
+                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                          hostbuf=nassign_data)
 
 piece_buffer = cl.Buffer(ctx,
                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
@@ -257,19 +270,16 @@ worker_buffer = cl.Buffer(ctx,
                           hostbuf=worker_pos)
 
 # len(pos_list) is just a guess at the max results per kernel run
-found_data = np.array([0]*width*height*100, np.int16)
+#found_limit = 1000
+found_limit = 200
+found_data = np.array([0]*width*height*found_limit, np.int16)
 found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY,
-                         len(pos_list)*width*height*2)
+                         found_limit*width*height*2)
 
 nfound_data = np.array([0], np.int32)
 nfound_buffer = cl.Buffer(ctx,
                           cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
                           hostbuf=nfound_data)
-
-nassign_data = np.array([wgs*cu], np.int32)
-nassign_buffer = cl.Buffer(ctx,
-                          cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                          hostbuf=nassign_data)
 
 res_data = np.array([0]*wgs*cu, np.int32)
 res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
@@ -279,7 +289,9 @@ calls = 0
 solutions = 0
 max_found = 0
 
-start_time = time.time()
+start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
+nodes = 0
+last_time = 0
 
 while True:
     prog.mykernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
@@ -302,19 +314,28 @@ while True:
         break
     nodes += last_nodes
     if calls % 10 == 0:
+        workers_left = 0
+        for i in worker_pos:
+            if i != -1:
+                workers_left += 1
         status = 'calls={}'.format(calls)
         status += ',nodes={}'.format(nodes)
-        status += ',active={}/{}'.format(nassign_data[0],len(pos_list))
+        status += ',active={}'.format(workers_left)
         status += ',found={}'.format(nfound_data[0]+solutions)
         status += ',remain={}/{}'.format(nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0])
-        status += ',rate={0:.2f}'.format(nodes/1000000/(time.time()-start_time))
-        status += ',time={0:.0f}'.format(time.time()-start_time)
+        this_time = int(time.time())-start_time
+        status += ',rate={0:.2f}'.format(float(nodes)/1000000/this_time)
+        status += ',time={}'.format(this_time)
         # rate2 is number of assignments completed per second
-        rate2 = (nassign_data[0]-wgs*cu)/(time.time()-start_time)
+        rate2 = (nassign_data[0]-wgs*cu)/this_time
         status += ',rate2={0:.3f}'.format(rate2)
         # remain2 is number of days left based on remaining assignments and rate2
         remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
         status += ',remain2={0:.2f}'.format(remain2)
+        if last_time != 0 and this_time == last_time:
+            node_limit *= 2
+            print('node_limit = %d' % node_limit)
+        last_time = this_time
         print(status, flush=True)
     if nfound_data[0] > 0:
         cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
@@ -329,9 +350,10 @@ while True:
         print('solution {}: {}'.format(solutions,' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]])))
     nfound_data[0] = 0
     cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
+    cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
     cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
     cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
     
-print('nodes = {}'.format(nodes))
+print('nodes = {}'.format(nodes+nodes1))
 print('num solutions = {}'.format(solutions))
 print('max_found = {}'.format(max_found))
