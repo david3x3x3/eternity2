@@ -121,8 +121,12 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
       k = placed[(depth-1)];
       i=pieces[fit_table2[k][0]][(5-fit_table2[k][1])&3];
 
-      k = placed[(depth-width)];
-      j=pieces[fit_table2[k][0]][(6-fit_table2[k][1])&3];
+      if (depth-width >= 0) {
+	k = placed[(depth-width)];
+	j=pieces[fit_table2[k][0]][(6-fit_table2[k][1])&3];
+      } else {
+	j=0;
+      }
 
       placed[depth] = fit_table1[(i*edgecount+j)*4+
 				 (depth >= WIDTH*(HEIGHT-1))*2+
