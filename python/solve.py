@@ -4,6 +4,8 @@ import pyopencl as cl
 import numpy as np
 import time
 import os
+print('args = %s' % ' '.join(sys.argv))
+
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
 #os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
@@ -227,11 +229,33 @@ while True:
     print("%d positions found with depth %d" % (len(pos_list), depth))
     if len(sys.argv) > i:
         depth = limit
-        placed = [dummypos]*width + pos_list[int(sys.argv[i])]
+        pos_list = [pos_list[int(sys.argv[i])],]
+        placed = [dummypos]*width + pos_list[0]
         i += 1
-        limit = int(sys.argv[i])
-        i += 1
-        pos_list = []
+        if len(sys.argv) > i:
+            limit = int(sys.argv[i])
+            i += 1
+            pos_list = []
+        else:
+            # try to figure out how far to extend the search to get 10x the number of positions as workers
+            while len(pos_list) < wgs*cu*10:
+                new_pos_list = []
+                limit = len(pos_list[0])
+                depth = limit - 1
+                print('%d positions; extending to depth %d' % (len(pos_list), limit))
+                for pos in pos_list:
+                    placed = [dummypos]*width + pos
+                    while True:
+                        nodes1 += mysearch(placed, depth, limit)
+                        pos_copy = placed[width:]
+                        #print('pos_copy = %s' % str(pos_copy))
+                        if len(pos_copy) <= limit:
+                            break
+                        if placed[-1] != 0:
+                            new_pos_list += [pos_copy]
+                        del placed[-1:]
+                pos_list = new_pos_list
+            break
     else:
         break
 #print('{}: pos_list = {}'.format(len(pos_list), pos_list))
