@@ -5,7 +5,7 @@
 // optional:
 // return solutions found
 
-#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
+//#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
 
 __constant short fit_table1[] = { PYFITTABLE1 };
 __constant short fit_table2[][2] = { PYFITTABLE2 };
@@ -19,8 +19,14 @@ __constant short fit_table2[][2] = { PYFITTABLE2 };
 //__constant short width = WIDTH, height = HEIGHT, edgecount = PYEDGECOUNT;
 __constant short pieces[][4] = { PYPIECES };
 
-__kernel void solve(int limit, __global short *search_data, __global int *nfound_data, __local short *lm_placed, __local unsigned char *lm_used,
-		    __local short *lm_mindepth, __local short *lm_depth, __global int *res) {
+__kernel void solve(int limit,
+		    __global short *search_data,
+		    __global int *nfound_data,
+		    __local short *lm_placed,
+		    __local unsigned char *lm_used,
+		    __local short *lm_mindepth,
+		    __local short *lm_depth,
+		    __global int *res, int fake_gid) {
   int gid = get_global_id(0), gsize = get_global_size(0);
   int lid = get_local_id(0), lsize = get_local_size(0);
   int i, j, k, nodes=0;
@@ -28,6 +34,15 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
   local short *placed = 0;
   local unsigned char *used;
   
+  if (fake_gid) {
+    i = get_global_size(0) / lsize; // cu
+    // if (gid == 0) { printf("detected cu = %d\n", i); }
+    j = gid / lsize; // orig cu number
+    gid = lid*i + j;
+  } else {
+    gid = get_global_id(0);
+  }
+
   used = lm_used+WIDTH*HEIGHT*lid;
   for(i=0;i<WIDTH*HEIGHT;i++) {
     used[i] = 0;
@@ -59,13 +74,12 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
     state = 2;
   }
 
-#define MAXSPLIT 16
+#define MAXSPLIT lsize
 
   while (limit > 0 || state != 2) {
     //if (limit > 0 && limit % 10 == 0) {
-    if (limit > 0) {
+    if (limit > 0 && limit == 10000) {
       // limit has to stay syncronized between all workers for barriers to work
-      //if (gid == 0) { printf("barrier 1\n"); }
       barrier(CLK_LOCAL_MEM_FENCE);
       if (lid == 0) {
 	// have lid #0 identify the work units to copy
@@ -110,31 +124,28 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
 	  }
 	  k++;
 	}
-	printf("j = %d\n", j);
       }
-      //if (gid == 0) { printf("barrier 2\n"); }
+    
       barrier(CLK_LOCAL_MEM_FENCE);
-      if (1) {
-	// do the copy (in parallel)
-	if (used[0] == 0xf0) { // only splitters are running concurrently
-	  j = placed[0];
-	  if (j >= 0) {
-	    printf("worker %d copying %d\n", lid, j);
-	    lm_mindepth[lid] = lm_depth[lid] = lm_mindepth[j];
-	    lm_mindepth[j]++;
-	    for (i=0; i < WIDTH*HEIGHT; i++) {
-	      placed[i] = lm_placed[WIDTH*HEIGHT*j+i];
-	      used[i] = 0;
-	    }
-	    for (i=0; i <= lm_depth[lid]; i++) {
-	      used[fit_table2[placed[i]][0]]++;
-	    }
-	    state = 1;
+
+      // do the copy (in parallel)
+      if (used[0] == 0xf0) { // only splitters are running concurrently
+	j = placed[0];
+	if (j >= 0) {
+	  /* printf("worker %d copying %d\n", lid, j); */
+	  lm_mindepth[lid] = lm_depth[lid] = lm_mindepth[j];
+	  lm_mindepth[j]++;
+	  for (i=0; i < WIDTH*HEIGHT; i++) {
+	    placed[i] = lm_placed[WIDTH*HEIGHT*j+i];
+	    used[i] = 0;
 	  }
+	  for (i=0; i <= lm_depth[lid]; i++) {
+	    used[fit_table2[placed[i]][0]]++;
+	  }
+	  state = 1;
 	}
       }
 	
-      //if (gid == 0) { printf("barrier 3\n"); }
       barrier(CLK_LOCAL_MEM_FENCE);
     }
 
@@ -169,7 +180,13 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
 				   ((lm_depth[lid]+1)%WIDTH==0)];
 	i=fit_table2[placed[lm_depth[lid]]][0];
 	if (i == -1) {
-	  state++; // can't add another piece
+	  --lm_depth[lid];
+	  if (lm_depth[lid] < 0 || lm_depth[lid] < lm_mindepth[lid]) {
+	    lm_mindepth[lid] = -1;
+	    state = 2;
+	  } else {
+	    state++; // can't add another piece
+	  }
 	} else {
 	  used[i]++; // adding piece i
 	  if (used[i] > 1) {
@@ -195,10 +212,8 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
       i=fit_table2[placed[lm_depth[lid]]][0];
       //if (gid==0) { printf("try to replace with piece %d\n", i); }
       if (i == -1) {
-	//if (gid==0) { printf("we have to back up\n"); }
 	// we tried the last piece that will fit here
 	if (--lm_depth[lid] < lm_mindepth[lid]) {
-	  // if (gid==0) { printf("we've backed up past the start. we're done.\n"); }
 	  // going back further completes the search
 	  lm_mindepth[lid] = -1;
 	  state++;
@@ -206,7 +221,6 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
       } else {
 	// the next piece that fits here is not already used
 	if (++used[i] < 2) {
-	  //if (gid==0) { printf("piece %d is not used\n", used[i]); }
 	  lm_depth[lid]++;
 	  placed[lm_depth[lid]] = -1;
 	  if (limit) {
@@ -215,8 +229,8 @@ __kernel void solve(int limit, __global short *search_data, __global int *nfound
 	    state=2; //we've reached a stable position to stop
 	  }
 	  nodes++;
-	} else {
-	  //if (gid==0) { printf("piece %d is already used\n", used[i]); }
+	  //} else {
+	  //if (lid==2) { printf("piece %d is already used\n", i); }
 	}
       }
     }

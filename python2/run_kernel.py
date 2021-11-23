@@ -1,6 +1,7 @@
 import sys
 import pyopencl as cl
-import numpy
+import numpy as np
+import time
 
 edgecount = 0
 
@@ -54,8 +55,8 @@ for f in sorted(fit):
     else:
         fit1[pos] = 2
 
-print('fit1 =', fit1)
-print('fit2 =', fit2)
+#print('fit1 =', fit1)
+#print('fit2 =', fit2)
 
 # Create context and command queue
 platform = cl.get_platforms()[0]
@@ -84,7 +85,7 @@ program_text = program_text.replace('PYFITTABLE2',','.join(map(str,fit2c)))
 program_text = program_text.replace('PYEDGECOUNT',str(edgecount))
 program_text = program_text.replace('KWIDTH',str(width))
 program_text = program_text.replace('KHEIGHT',str(height))
-print('program_text =', program_text)
+#print('program_text =', program_text)
 program = cl.Program(ctx, program_text)
 try:
    program.build()
@@ -93,7 +94,6 @@ except:
    print(program.get_build_info(devices[0], cl.program_build_info.LOG))
    raise
 
-limit = numpy.int32(1)
 # lm_placed is the current search state with piece and orientation in each position
 lm_placed = cl.LocalMemory(wgs*(width*height) * 2)
 # lm_used is to keep track of which pieces are used
@@ -102,25 +102,29 @@ lm_used = cl.LocalMemory(wgs*width*height)
 lm_mindepth = cl.LocalMemory(wgs*2)
 lm_depth = cl.LocalMemory(wgs*2)
 
-search_data = numpy.array([-1]*(wgs*cu*(width*height+1)), numpy.int16)
+search_data = np.array([-1]*(wgs*cu*(width*height+1)), np.int16)
 search_data[0] = 0
 search_buffer = cl.Buffer(ctx, 
                           cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, 
                           hostbuf=search_data)
-nfound_data = numpy.array([0], numpy.int32)
+nfound_data = np.array([0], np.int32)
 nfound_buffer = cl.Buffer(ctx,
                           cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
                           hostbuf=nfound_data)
 
-res_data = numpy.array([0]*wgs*cu, numpy.int32)
+res_data = np.array([0]*wgs*cu, np.int32)
 res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
+
+start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
 
 nodes = 0
 calls = 0
 active=1
 while active > 0:
    # Create, configure, and execute kernel
-   program.solve(queue, (wgs*cu,), (wgs,), limit, search_buffer, nfound_buffer, lm_placed, lm_used, lm_mindepth, lm_depth, res_buffer)
+   program.solve(queue, (wgs*cu,), (wgs,), np.int32(10000), search_buffer,
+                 nfound_buffer, lm_placed, lm_used, lm_mindepth, lm_depth,
+                 res_buffer, np.int32(calls % 2))
    calls += 1
    #if calls % 10 == 0:
    #print('reading results')
@@ -128,20 +132,22 @@ while active > 0:
    cl._enqueue_read_buffer(queue, res_buffer, res_data)
    cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data).wait()
 
-   nodes2 = sum(res_data)
+   nodes2 = sum(map(int, res_data))
    nodes += nodes2
    
-   if calls % 1 == 0:
+   if calls % 10 == 0:
       active = 0
       for i in range(wgs*cu):
          if search_data[i] >= 0:
             active += 1
             x = [(fit2[x][0]+1,fit2[x][1]) for x in list(search_data[wgs*cu+width*height*i:wgs*cu+width*height*(i+1)]) if x != -1]
             #if len(x) == width*height:
-            print('%d (%d): %s' % (i, search_data[i], ' '.join(['/'.join(map(str,y)) for y in x])), flush=True)
+            #print('%d (%d): %s' % (i, search_data[i], ' '.join(['/'.join(map(str,y)) for y in x])), flush=True)
       status = 'calls = %d' % calls
       status += ', active = %d' % active
       status += ', nodes = %d' % nodes
+      this_time = int(time.time())-start_time
+      status += ',rate={0:.2f}'.format(float(nodes)/1000000/this_time)
       status += ', nfound = %d' % nfound_data[0]
       print(status, flush=True)
 
