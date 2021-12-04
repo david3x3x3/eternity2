@@ -9,6 +9,62 @@ print('args = %s' % ' '.join(sys.argv))
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
 #os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
+def mysearch(placed, mindepth, maxdepth):
+    count=0
+    nodes = 0
+    #print(placed)
+    #print([fit2[p] for p in placed[width:]])
+    # which pieces are placed (not positions)
+    placed2 = [0]*width*height
+    for p2 in [fit2[p] for p in placed[width:]]:
+        if p2:
+            placed2[p2[0]] = 1
+
+    while len(placed)-width > mindepth:
+        i = placed[-1]
+        if fit2[i]:
+            # decrement the count of the piece we previously tried
+            placed2[fit2[i][0]] -= 1
+        # try the next piece
+        placed[-1] += 1
+        i = placed[-1]
+        if not fit2[i]:
+            # no more pieces to try here
+            del placed[-1:]
+            continue
+
+        ii = fit2[i][0]
+
+        # count how many times we have placed this piece
+        placed2[ii] += 1
+        if placed2[ii] > 1:
+            # skip if we've already placed it somewhere else
+            continue
+
+        nodes += 1
+
+        if len(placed) == (width+1)*height:
+            return nodes
+            # for p in [fit2[p2] for p2 in placed[width:]]:
+            #     print('/'.join(map(str,p)), end=' ')
+            # print('')
+            print(str(count) + ': ', end = '')
+            print(' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in placed[width:]]]))
+            sys.stdout.flush()
+            count += 1
+            continue
+
+        up=pieces[fit2[placed[-width]]][2]
+        left=pieces[fit2[placed[-1]]][1]
+        right = int(len(placed) % width == width - 1)
+        down = int(len(placed) // width == height)
+        placed += [fit1[((left*edgecount+up)*2+down)*2+right]-1]
+        if len(placed) > width+maxdepth:
+            return nodes
+        
+    #print('count = ' + str(count))
+    return nodes
+
 for i in range(len(cl.get_platforms())):
     p = cl.get_platforms()[i]
     print('Plaform ' + str(i) + ': ' + p.name)
@@ -120,69 +176,16 @@ print('kernel.LOCAL_MEM_SIZE = ' + str(kernel.get_work_group_info(cl.kernel_work
 #print('fit1 = ' + str(fit1))
 #print('fit2 = ' + str(fit2))
 
-def mysearch(placed, mindepth, maxdepth):
-    count=0
-    nodes = 0
-    #print(placed)
-    #print([fit2[p] for p in placed[width:]])
-    # which pieces are placed (not positions)
-    placed2 = [0]*width*height
-    for p2 in [fit2[p] for p in placed[width:]]:
-        if p2:
-            placed2[p2[0]] = 1
-
-    while len(placed)-width > mindepth:
-        i = placed[-1]
-        if fit2[i]:
-            # decrement the count of the piece we previously tried
-            placed2[fit2[i][0]] -= 1
-        # try the next piece
-        placed[-1] += 1
-        i = placed[-1]
-        if not fit2[i]:
-            # no more pieces to try here
-            del placed[-1:]
-            continue
-
-        ii = fit2[i][0]
-
-        # count how many times we have placed this piece
-        placed2[ii] += 1
-        if placed2[ii] > 1:
-            # skip if we've already placed it somewhere else
-            continue
-
-        nodes += 1
-        
-        if len(placed) == (width+1)*height:
-            return nodes
-            # for p in [fit2[p2] for p2 in placed[width:]]:
-            #     print('/'.join(map(str,p)), end=' ')
-            # print('')
-            print(str(count) + ': ', end = '')
-            print(' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in placed[width:]]]))
-            sys.stdout.flush()
-            count += 1
-            continue
-
-        up=pieces[fit2[placed[-width]]][2]
-        left=pieces[fit2[placed[-1]]][1]
-        right = int(len(placed) % width == width - 1)
-        down = int(len(placed) // width == height)
-        placed += [fit1[((left*edgecount+up)*2+down)*2+right]-1]
-        if len(placed) > width+maxdepth:
-            return nodes
-        
-    #print('count = ' + str(count))
-    return nodes
-
 maxcu = device.max_compute_units
 wgs = device.local_mem_size//(width*height*2)
+if device.type != cl.device_type.GPU:
+    wgs = 1
 if device.max_work_group_size < wgs:
     wgs = device.max_work_group_size
 if wgs > 100:
     # sometimes this estimate is off, and we run out of memory
     wgs -= 1
+    
 print('wgs = ' + str(wgs))
 cu = device.max_compute_units
 print('cu = ' + str(cu))
@@ -197,18 +200,17 @@ nodes1 = 0
 
 i = 2
 
-if len(sys.argv) > 2:
-    node_limit=int(sys.argv[i])
-    i += 1
-else:
-    node_limit = 10000
+node_limit = 16
 print('node limit = ' + str(node_limit))
 
-if len(sys.argv) > 3:
-    limit=int(sys.argv[i])
+search_args = list(sys.argv)
+print('search_args = %s' % search_args)
+if len(search_args) > i:
+    limit=int(search_args[i])
     i += 1
 else:
-    limit = width*height
+    limit = 0
+    
 print('depth limit = ' + str(limit))
 
 start_time = int(time.time())
@@ -223,17 +225,17 @@ while True:
         #print('pos copy len = %d' % len(pos_copy))
         if len(pos_copy) <= limit:
             break
-        if len(sys.argv) > i or placed[-1] != 0:
+        if len(search_args) > i or placed[-1] != 0:
             pos_list += [pos_copy]
         del placed[-1:]
     print("%d positions found with depth %d" % (len(pos_list), depth))
-    if len(sys.argv) > i:
+    if len(search_args) > i:
         depth = limit
-        pos_list = [pos_list[int(sys.argv[i])],]
+        pos_list = [pos_list[int(search_args[i])],]
         placed = [dummypos]*width + pos_list[0]
         i += 1
-        if len(sys.argv) > i:
-            limit = int(sys.argv[i])
+        if len(search_args) > i:
+            limit = int(search_args[i])
             i += 1
             pos_list = []
         else:
@@ -352,10 +354,10 @@ while True:
         status += ',time={}'.format(this_time)
         # rate2 is number of assignments completed per second
         rate2 = (nassign_data[0]-wgs*cu)/this_time
-        status += ',rate2={0:.3f}'.format(rate2)
+        # status += ',rate2={0:.3f}'.format(rate2)
         # remain2 is number of days left based on remaining assignments and rate2
         remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
-        status += ',remain2={0:.2f}'.format(remain2)
+        # status += ',remain2={0:.2f}'.format(remain2)
         if last_time != 0 and this_time == last_time:
             node_limit *= 2
             print('node_limit = %d' % node_limit)
