@@ -4,6 +4,7 @@ import pyopencl as cl
 import numpy as np
 import time
 import os
+import random
 print('args = %s' % ' '.join(sys.argv))
 
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
@@ -205,11 +206,12 @@ print('node limit = ' + str(node_limit))
 
 search_args = list(sys.argv)
 print('search_args = %s' % search_args)
-if len(search_args) > i:
-    limit=int(search_args[i])
-    i += 1
-else:
-    limit = 0
+if len(search_args) <= i:
+    # default to searching the whole puzzle
+    search_args += [0, 0]
+
+limit=int(search_args[i])
+i += 1
     
 print('depth limit = ' + str(limit))
 
@@ -231,7 +233,12 @@ while True:
     print("%d positions found with depth %d" % (len(pos_list), depth))
     if len(search_args) > i:
         depth = limit
-        pos_list = [pos_list[int(search_args[i])],]
+        if search_args[i] == 'r':
+            j = random.randrange(len(pos_list))
+            search_args[i] = '%d*' % j
+        else:
+            j = int(search_args[i])
+        pos_list = [pos_list[j],]
         placed = [dummypos]*width + pos_list[0]
         i += 1
         if len(search_args) > i:
@@ -261,6 +268,8 @@ while True:
     else:
         break
 #print('{}: pos_list = {}'.format(len(pos_list), pos_list))
+
+print('modified args = %s' % search_args)
 
 piece_data = np.array([0]*width*height*len(pos_list), np.int16)
 #print('START pos_list')
