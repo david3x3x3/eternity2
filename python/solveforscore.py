@@ -94,7 +94,7 @@ def search2(start_layout, goal_pos, skip_allow2, orig_skips, orig_score):
 
         if nodes % 200000 == 0:
             t = int(time.time())-start_time
-            print(f'nodes = {nodefmt(nodes)}, range = {minpos}-{maxpos}, rate = {nodefmt(nodes//t)}     ', end='\r')
+            print(f'nodes = {nodefmt(nodes)}, range = {minpos}-{maxpos}, rate = {nodefmt(nodes//t)}     ', end='\r', flush=True)
             minpos = 256
             maxpos = 0
         count = score // 1000
@@ -115,11 +115,25 @@ def search2(start_layout, goal_pos, skip_allow2, orig_skips, orig_score):
                 if i > 0 and i%width == 0:
                     print('')
                 if x:
-                    print(f'{x[0]:3d}/{x[1]%4}', end = ' ')
+                    underline=False
+                    if i+16 < 256 and disp[i+16] and pieces[disp[i+16]][0] != pieces[x][2]:
+                        underline=True
+                    if underline:
+                        print(f'{27:c}[4m', end='')
+                    print(f'{x[0]:3d}/{x[1]%4}', end = '')
+                    if underline:
+                        print(f'{27:c}[24m', end='')
+                    if i+1 < 256 and disp[i+1] and pieces[disp[i+1]][3] != pieces[x][1]:
+                        print('|', end = '')
+                    else:
+                        print(' ', end = '')
                 else:
                     print('  ?  ', end = ' ')
-            print('')
-            print(f'nodes = {nodefmt(nodes)}, score = {score}, first208 = {nodefmt(first208)}, skips = {"+".join(map(str,glob_skiplist+[skips]))}={skips+orig_skips}', flush=True)
+            print(f'\n\nnodes = {nodefmt(nodes)}, '
+                  f'score = {score}, '
+                  f'first208 = {nodefmt(first208)}, '
+                  f'skips = {"+".join(map(str,glob_skiplist+[skips]))}={skips+orig_skips}'
+                  f'{27:c}]0;{score//1000}-{score%1000}{7:c}', flush=True)
 
         if count >= goal_pos:
             yield [list(solution), skips+orig_skips, score]
@@ -197,7 +211,8 @@ def search1(start, skiplist):
                 continue
             search1(res, skiplist+[skip])
 
-while True:
-    # loop because lack of early progress could cause us to abort
-    init()
-    search1(([None]*height*width, 0, 0), [])
+if __name__ == "__main__":
+    while True:
+        # loop because lack of early progress could cause us to abort
+        init()
+        search1(([None]*height*width, 0, 0), [])
