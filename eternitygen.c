@@ -13,20 +13,55 @@
 
 #include "genheader1.c"
 long long nodes=0, nodes2=0, nodes3=0, target1, target2, save_nodes;
-int cursors[WIDTH*HEIGHT], best=0, core, restoring=0;
+int cursors[WIDTH*HEIGHT], best=0, core, restoring=0, solutions=0;
+int specialp[WIDTH*HEIGHT], special=0;
 
 time_t start_time;
 
 void
 print_puz(int pos) {
-  int i;
+  int i, r, c;
   char buf[8192];
   
-  printf("best solution %d: \n", pos+1);
+  // printf("best solution %d: ", pos+1);
+  /* for(r=0; r<HEIGHT; r++) { */
+  /*   for(c=0; c<WIDTH; c++) { */
+  /*     if (r*width+c <= pos) { */
+  /* 	printf("%02x ", fit_table2[cursors[r*WIDTH+c]]/4); */
+  /*     } else { */
+  /* 	printf(".. "); */
+  /*     } */
+  /*   } */
+  /*   printf("\n"); */
+  /* } */
+#if 0
+  for(i=0; i<=pos; i++) {
+    printf("%d ", cursors[i]);
+  }
+  printf("\n");
+
+  for(i=0; i<=pos; i++) {
+    printf("%d ", fit_table2[cursors[i]]);
+  }
+  printf("\n");
+  
+  for(i=1330; i<1340; i++) {
+    printf("%d ", fit_table2[i]);
+  }
+  printf("\n");
+#endif
+
+  printf("best %d: ", pos);
   for(i=0; i<=pos; i++) {
     printf("%d/%d ", fit_table2[cursors[i]]/4+1, fit_table2[cursors[i]]%4);
   }
   printf("\n");
+  fflush(stdout);
+
+  if (pos+1 == HEIGHT*WIDTH) {
+    printf("solved\n");
+    solutions += 1;
+  }
 
 #ifdef __EMSCRIPTEN__
   sprintf(buf, "postMessage({msgType:'best',data:[");
@@ -67,22 +102,31 @@ save_restore() {
   return 0;
 }
 
+long long last_report=0;
+
 void
-speed_report(long long nodes, int last) {
+speed_report(long long nodes, int last, int curr) {
   static int status_num=0;
   char msg[256];
   char msg2[256];
+  if (last == 0 && nodes - last_report < 400000000) {
+    return;
+  }
+  last_report = nodes;
   if(last) {
+    printf("%d solutions\n", solutions);
     printf("total ");
   } else {
     printf("status #%d,active=1,", status_num++);
   }
-  sprintf(msg,"nodes=%lld,time=%ld,best=%d,nmps=%.3f",
+  sprintf(msg,"nodes=%lld,time=%ld,best=%d,nmps=%.3f,depth=%d",
 	  nodes,
 	  time(NULL)-start_time,
 	  best,
-	  nodes/(1000000.0*(time(NULL)-start_time)));
+	  nodes/(1000000.0*(time(NULL)-start_time)),
+	  curr);
   puts(msg);
+  fflush(stdout);
 #ifdef __EMSCRIPTEN__
   sprintf(msg2, "postMessage({msgType:'status',data:'%s','core':%d});", msg, core);
   emscripten_run_script(msg2);
@@ -93,12 +137,53 @@ int placed[WIDTH*HEIGHT], downs[WIDTH*HEIGHT];
 
 #include "genheader2.c"
 
+void shuffle(int *array, size_t n)
+{
+    if (n > 1) 
+    {
+        size_t i;
+        for (i = 0; i < n - 1; i++) 
+        {
+          size_t j = i + rand() / (RAND_MAX / (n - i) + 1);
+          int t = array[j];
+          array[j] = array[i];
+          array[i] = t;
+        }
+    }
+}
+
 long long
 mysearch(int func) {
-  int j, k;
+  int j, k, m;
   static int pos, row, col, up, left, down, right;
 
   if (func == 0) {
+    // shuffle
+    for(j=0;j<sizeof(fit_table2)/4; j++) {
+      if(fit_table2[j] != -1) {
+	for(m=j;m<sizeof(fit_table2)/4;m++) {
+	  if(fit_table2[m] == -1) {
+	    break;
+	  }
+	}
+	shuffle(fit_table2 + j, m-j);
+	j = m;
+      }
+    }
+    // count special edges
+    m = 0;
+    for (j=0;j<width*height;j++) {
+      specialp[j] = 0;
+    }
+    for (j=0;j<width*height;j++) {
+      for (k=0;k<4;k++) {
+	if (pieces[j][k] == 6 || pieces[j][k] == 7) {
+	  specialp[j] += 1;
+	  m += 1;
+	}
+      }
+    }
+
     //init
     for(pos=0; pos<width*height; pos++) {
       placed[pos]=0;
@@ -139,9 +224,20 @@ int
 origmain(char *argv1, char *argv2) {
 //origmain(int argc, char *argv[]) {}
   char msg[128];
+  unsigned int rnd=0;
   nodes=nodes2=nodes3=0;
   best=0;
   core = atoi(argv1);
+  FILE *fp = fopen("/dev/urandom", "r");
+  rnd = rnd*256+(unsigned char) getc(fp);
+  rnd = rnd*256+(unsigned char) getc(fp);
+  rnd = rnd*256+(unsigned char) getc(fp);
+  rnd = rnd*256+(unsigned char) getc(fp);
+  fclose(fp);
+  printf("seed = %u\n", rnd);
+
+  srand(time(NULL)*1000+getpid()%1000);
+  //srand(rnd);
   sprintf(msg,"postMessage('core = %d');", core);
 #ifdef __EMSCRIPTEN__
   emscripten_run_script(msg);
@@ -171,7 +267,7 @@ origmain(char *argv1, char *argv2) {
   /*   printf("best = %d\n", best); */
   /* } */
   
-  setbuf(stdout,0);
+  //setbuf(stdout,0);
   //#ifdef __EMSCRIPTEN__
 #if 0
   emscripten_set_main_loop(repeat_search,0,0);
@@ -183,7 +279,6 @@ origmain(char *argv1, char *argv2) {
   /* } */
   mysearch(0);
   mysearch(1);
-  printf("all done\n");
 #endif
 
 #ifdef __EMSCRIPTEN__
