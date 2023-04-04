@@ -1,5 +1,8 @@
 #include <stdio.h>
 
+#define FALSE 0
+#define TRUE 1
+
 //#define WIDTH 10
 //#define HEIGHT 10
 
@@ -10,7 +13,7 @@ extern char *fit_table_buffer;
 
 void
 gen(int target1, int target2, int target3) {
-  int i, pos, row, col, up, left, down, right;
+  int i, pos, row, col, up, left, down, right, prev_was_hint=FALSE;
   
   /* target1=atoi(argv[1]); */
   /* target2=atoi(argv[2]); */
@@ -58,16 +61,41 @@ gen(int target1, int target2, int target3) {
     puts("    if(j < 0) {");
     if(pos==0) {
       puts("      printf(\"no more solutions\\n\");");
-      printf("      speed_report(nodes,1);\n");
+      printf("      speed_report(nodes,1,0);\n");
       printf("      goto POS%d;\n", width*height);
     } else {
       puts("      // no more pieces to try here");
-      printf("      placed[fit_table2[cursors[%d]]/4]=0;\n", pos-1);
+      if(!prev_was_hint) {
+	printf("      placed[fit_table2[cursors[%d]]/4]=0;\n", pos-1);
+      }
       printf("      goto POS%d;\n", pos-1);
     }
     puts("    }");
-    puts("    if(placed[j/4]) {");
+    prev_was_hint = FALSE;
+    int hint=0;
+    int hintpos[] = { 135, 34, 45, 210, 221 };
+    int hintpc[] = { 138*4+2, 207*4+3, 254*4+3, 180*4+3, 248*4+0 };
+    int hintedge = -1;
+    for(hint=0;hint<5;hint++) {
+      if (pos == hintpos[hint]) {
+	break;
+      } else if(pos+16 == hintpos[hint]) {
+	hintedge = pieces[hintpc[hint]/4][(4-hintpc[hint]%4)%4];
+	break;
+      }
+    }
+    if (hint != 5) {
+      if (hintedge != -1) {
+	printf("    if(placed[j/4] || pieces[j/4][(6-j%%4)%%4] != %d) {\n", hintedge);
+      } else {
+	printf("    if(j != %d) {\n", hintpc[hint]);
+	prev_was_hint = TRUE;
+      }
+    } else {
+      printf("    if(placed[j/4]) {\n");
+    }
     puts("      // the piece we are trying was already placed");
+    puts("      // or is incorrect because of hints");
     printf("      goto POS%d;\n", pos);
     puts("    }");
     if(pos+1 == target1) {
@@ -89,7 +117,7 @@ gen(int target1, int target2, int target3) {
 
     if(pos >= target3) {
       //puts("    if(!(nodes % 100000000)) {");
-      printf("    speed_report(nodes,0);\n");
+      printf("    speed_report(nodes,0,%d);\n", pos);
       //puts("    printf(\"%ld nodes\\n\", nodes);");
       //puts("    }");
       puts("");
