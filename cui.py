@@ -61,17 +61,20 @@ def print_url():
 
 q = Queue()
 
-all_processes = []
+all_processes = [None]*procs
 
-for n in range(procs):
-    #cmd = './eternity2-gen.exe 0 %d' % random.randint(0,6003355)
+def start_proc(n):
+    global all_processes
     cmd = './eternity2-gen.exe %d 0' % n
     print(cmd)
     p = Popen(cmd, stdout=PIPE, bufsize=1, close_fds=ON_POSIX)
-    all_processes += [p]
+    all_processes[n] = p
     t = Thread(target=enqueue_output, args=(p.stdout, q, n))
     t.daemon = True # thread dies with the program
     t.start()
+
+for n in range(procs):
+    start_proc(n)
 
 fp=open('eternity2.txt','r')
 width, height = list(map(int,fp.readline().strip('\n').split(' ')))
@@ -120,7 +123,8 @@ while True:
                 c = msvcrt.getch().decode('ascii')
                 if c == 'q':
                     for p in all_processes:
-                        p.kill()
+                        if p:
+                            p.kill()
                     goto_rc(16+procs+2,1, False)
                     exit(0)
                 elif c == 'j':
@@ -141,6 +145,9 @@ while True:
                     goto_rc(curs+1, 1, False)
                 elif c == 'v':
                     webbrowser.open(url)
+                elif c == 'r': # restart
+                    all_processes[curs].kill()
+                    start_proc(curs)
                 elif c == 'o':
                     pargs = ['C:/Users/David/Downloads/pypy3.8-v7.3.7-win64/pypy3.exe','finish.py'] + log
                     proc = Popen(pargs,stdout=PIPE)
