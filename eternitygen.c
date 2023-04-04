@@ -188,6 +188,11 @@ mysearch(int func) {
     for(pos=0; pos<width*height; pos++) {
       placed[pos]=0;
     }
+    int hintpcnum[] = { 138, 207, 254, 180, 248 };
+    for(pos=0; pos<5; pos++) {
+      placed[hintpcnum[pos]] = 1;
+    }
+    
     //placed[0] = 1;
     cursors[0] = 2;
   } else if(func == 1) {
