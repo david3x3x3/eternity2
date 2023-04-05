@@ -55,9 +55,45 @@ def line_to_url(line):
     return myurl
     
 def print_url():
-    global url
+    global url, urlf
     
-    url = line_to_url(bests[curs])
+    mystr = bests[curs]
+    url = line_to_url(mystr)
+    pieces = list(map(int,[s.split('/')[0] for s in mystr.split(':')[1].strip().split(' ')]))
+    corners = set(list(range(1,5)))
+    edges = set(list(range(5,61)))
+    middle = set(list(range(61,257)))
+    for n in pieces:
+        corners.discard(n)
+        edges.discard(n)
+        middle.discard(n)
+    total = len(pieces)
+    while total < 256:
+        row = (total)//16
+        col = (total)%16
+        if col == 0:
+            if row == 0:
+                mystr += f' {corners.pop()}/1'
+            elif row == 15:
+                mystr += f' {corners.pop()}/0'
+            else:
+                mystr += f' {edges.pop()}/1'
+        elif col == 15:
+            if row == 0:
+                mystr += f' {corners.pop()}/2'
+            elif row == 15:
+                mystr += f' {corners.pop()}/3'
+            else:
+                mystr += f' {edges.pop()}/3'
+        else:
+            if row == 0:
+                mystr += f' {edges.pop()}/2'
+            elif row == 15:
+                mystr += f' {edges.pop()}/0'
+            else:
+                mystr += f' {middle.pop()}/0'
+        total += 1
+    urlf = line_to_url(mystr)
 
 q = Queue()
 
@@ -65,7 +101,7 @@ all_processes = [None]*procs
 
 def start_proc(n):
     global all_processes
-    cmd = f'./eternity2-gen.exe {n} 0 5'
+    cmd = f'./eternity2-gen.exe {n} 0 1'
     p = Popen(cmd, stdout=PIPE, bufsize=1, close_fds=ON_POSIX)
     all_processes[n] = p
     t = Thread(target=enqueue_output, args=(p.stdout, q, n))
@@ -120,13 +156,13 @@ while True:
         if msvcrt.kbhit():
             while msvcrt.kbhit():
                 c = msvcrt.getch().decode('ascii')
-                if c == 'q':
+                if c == 'q': # quit
                     for p in all_processes:
                         if p:
                             p.kill()
                     goto_rc(16+procs+2,1, False)
                     exit(0)
-                elif c == 'j':
+                elif c == 'j': # next row
                     if curs + 1 >= procs:
                         continue
                     print_status(curs, False)
@@ -134,7 +170,7 @@ while True:
                     print_status(curs, True)
                     print_best()
                     goto_rc(curs+1, 1, False)
-                elif c == 'k':
+                elif c == 'k': # previous row
                     if curs < 1:
                         continue
                     print_status(curs, False)
@@ -142,12 +178,14 @@ while True:
                     print_status(curs, True)
                     print_best()
                     goto_rc(curs+1, 1, False)
-                elif c == 'v':
+                elif c == 'v': # view on bucas.name
                     webbrowser.open(url)
+                elif c == 'f': # fill remainder with random valid pieces and view
+                    webbrowser.open(urlf)
                 elif c == 'r': # restart
                     all_processes[curs].kill()
                     start_proc(curs)
-                elif c == f'{12:c}': # refresh
+                elif c == f'{12:c}': # refresh (^L)
                     print(f'{27:c}[2J',end='')
                     for n in range(procs):
                         if n != curs:
@@ -155,7 +193,7 @@ while True:
                     print_status(curs, True)
                     print_best()
                     goto_rc(curs+1, 1, False)
-                elif c == 'o':
+                elif c == 'o': # launch script to process current output
                     pargs = ['C:/Users/David/Downloads/pypy3.8-v7.3.7-win64/pypy3.exe','finish.py'] + log
                     proc = Popen(pargs,stdout=PIPE)
                     for line in proc.stdout:
