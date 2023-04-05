@@ -65,8 +65,7 @@ all_processes = [None]*procs
 
 def start_proc(n):
     global all_processes
-    cmd = './eternity2-gen.exe %d 0' % n
-    print(cmd)
+    cmd = f'./eternity2-gen.exe {n} 0 5'
     p = Popen(cmd, stdout=PIPE, bufsize=1, close_fds=ON_POSIX)
     all_processes[n] = p
     t = Thread(target=enqueue_output, args=(p.stdout, q, n))
@@ -113,7 +112,7 @@ def print_status(num, hilight):
         print('%c[7m' % 27, end='')
     print('%X %s%c[m ' % (num, statuses[num], 27), flush=hilight, end='')
 
-print('%c[2J' % 27,end='')
+print(f'{27:c}[2J',end='')
 while True:
     # read line without blocking
     try:  num, line = q.get_nowait() # or q.get(timeout=.1)
@@ -148,6 +147,14 @@ while True:
                 elif c == 'r': # restart
                     all_processes[curs].kill()
                     start_proc(curs)
+                elif c == f'{12:c}': # refresh
+                    print(f'{27:c}[2J',end='')
+                    for n in range(procs):
+                        if n != curs:
+                            print_status(n, False)
+                    print_status(curs, True)
+                    print_best()
+                    goto_rc(curs+1, 1, False)
                 elif c == 'o':
                     pargs = ['C:/Users/David/Downloads/pypy3.8-v7.3.7-win64/pypy3.exe','finish.py'] + log
                     proc = Popen(pargs,stdout=PIPE)
