@@ -15,6 +15,7 @@
 long long nodes=0, nodes2=0, nodes3=0, target1, target2, save_nodes;
 int cursors[WIDTH*HEIGHT], best=0, core, restoring=0, solutions=0;
 int specialp[WIDTH*HEIGHT], special=0;
+int hintcount=0;
 
 time_t start_time;
 
@@ -189,7 +190,7 @@ mysearch(int func) {
       placed[pos]=0;
     }
     int hintpcnum[] = { 138, 207, 254, 180, 248 };
-    for(pos=0; pos<5; pos++) {
+    for(pos=0; pos<hintcount; pos++) {
       placed[hintpcnum[pos]] = 1;
     }
     
@@ -226,13 +227,14 @@ repeat_search() {
 }
 
 int
-origmain(char *argv1, char *argv2) {
+origmain(char *argv1, char *argv2, char *argv3) {
 //origmain(int argc, char *argv[]) {}
   char msg[128];
   unsigned int rnd=0;
   nodes=nodes2=nodes3=0;
   best=0;
   core = atoi(argv1);
+  hintcount = atoi(argv3);
   FILE *fp = fopen("/dev/urandom", "r");
   rnd = rnd*256+(unsigned char) getc(fp);
   rnd = rnd*256+(unsigned char) getc(fp);
@@ -278,10 +280,6 @@ origmain(char *argv1, char *argv2) {
   emscripten_set_main_loop(repeat_search,0,0);
   emscripten_set_main_loop_timing(EM_TIMING_SETTIMEOUT, 0);
 #else
-  /* while(1) { */
-  /*   repeat_search(); */
-  /*   //printf("restarting search\n"); */
-  /* } */
   mysearch(0);
   mysearch(1);
 #endif
@@ -307,7 +305,7 @@ main() {
 
 int
 main(int argc, char *argv[]) {
-  origmain(argv[1],argv[2]);
+  origmain(argv[1],argv[2], argv[3]);
   exit(0);
 }
 

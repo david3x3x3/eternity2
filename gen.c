@@ -1,8 +1,5 @@
 #include <stdio.h>
 
-#define FALSE 0
-#define TRUE 1
-
 //#define WIDTH 10
 //#define HEIGHT 10
 
@@ -13,7 +10,7 @@ extern char *fit_table_buffer;
 
 void
 gen(int target1, int target2, int target3) {
-  int i, pos, row, col, up, left, down, right, prev_was_hint=FALSE;
+  int i, pos, row, col, up, left, down, right, prev_was_hint=0;
   
   /* target1=atoi(argv[1]); */
   /* target2=atoi(argv[2]); */
@@ -65,13 +62,14 @@ gen(int target1, int target2, int target3) {
       printf("      goto POS%d;\n", width*height);
     } else {
       puts("      // no more pieces to try here");
-      if(!prev_was_hint) {
-	printf("      placed[fit_table2[cursors[%d]]/4]=0;\n", pos-1);
+      if(prev_was_hint) {
+	printf("      if (hintcount < %d)\n", prev_was_hint);
       }
+      printf("      placed[fit_table2[cursors[%d]]/4]=0;\n", pos-1);
       printf("      goto POS%d;\n", pos-1);
     }
     puts("    }");
-    prev_was_hint = FALSE;
+    prev_was_hint = 0;
     int hint=0;
     int hintpos[] = { 135, 34, 45, 210, 221 };
     int hintpc[] = { 138*4+2, 207*4+3, 254*4+3, 180*4+3, 248*4+0 };
@@ -86,10 +84,10 @@ gen(int target1, int target2, int target3) {
     }
     if (hint != 5) {
       if (hintedge != -1) {
-	printf("    if(placed[j/4] || pieces[j/4][(6-j%%4)%%4] != %d) {\n", hintedge);
+	printf("    if(placed[j/4] || (hintcount >= %d && pieces[j/4][(6-j%%4)%%4] != %d)) {\n", hint+1, hintedge);
       } else {
-	printf("    if(j != %d) {\n", hintpc[hint]);
-	prev_was_hint = TRUE;
+	printf("    if((hintcount < %d && placed[j/4]) || (hintcount >= %d && j != %d)) {\n", hint+1, hint+1, hintpc[hint]);
+	prev_was_hint = hint+1;
       }
     } else {
       printf("    if(placed[j/4]) {\n");
