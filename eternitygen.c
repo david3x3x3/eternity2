@@ -17,7 +17,7 @@ int cursors[WIDTH*HEIGHT], best=0, core, restoring=0, solutions=0;
 int specialp[WIDTH*HEIGHT], special=0;
 int hintcount=0;
 
-time_t start_time;
+time_t start_time, last_report_time;
 
 void
 print_puz(int pos) {
@@ -52,12 +52,14 @@ print_puz(int pos) {
   printf("\n");
 #endif
 
+#ifndef __EMSCRIPTEN__
   printf("best %d: ", pos);
   for(i=0; i<=pos; i++) {
     printf("%d/%d ", fit_table2[cursors[i]]/4+1, fit_table2[cursors[i]]%4);
   }
   printf("\n");
   fflush(stdout);
+#endif
 
   if (pos+1 == HEIGHT*WIDTH) {
     printf("solved\n");
@@ -96,7 +98,7 @@ save_restore() {
   sprintf(filename, "save%d.dat.tmp", core);
   sprintf(filename2, "save%d.dat", core);
   fp = fopen(filename, "w");
-  fprintf(fp, "./b10x10.exe %d %lld %lld %lld %ld %d\n", core, target1, nodes3, 
+  fprintf(fp, "./b10x10.exe %d %lld %lld %lld %lld %d\n", core, target1, nodes3, 
 	  nodes, time(NULL)-start_time, best);
   fclose(fp);
   rename(filename, filename2);
@@ -107,10 +109,10 @@ long long last_report=0;
 
 void
 speed_report(long long nodes, int last, int curr) {
-  static int status_num=0;
+  static int status_num=0, interval=100000;
   char msg[256];
   char msg2[256];
-  if (last == 0 && nodes - last_report < 400000000) {
+  if (last == 0 && nodes - last_report < interval) {
     return;
   }
   last_report = nodes;
@@ -120,18 +122,23 @@ speed_report(long long nodes, int last, int curr) {
   } else {
     printf("status #%d,active=1,", status_num++);
   }
-  sprintf(msg,"nodes=%lld,time=%ld,best=%d,nmps=%.3f,depth=%d",
+  sprintf(msg,"nodes=%lld,time=%lld,best=%d,nmps=%.3f,depth=%d",
 	  nodes,
 	  time(NULL)-start_time,
 	  best,
 	  nodes/(1000000.0*(time(NULL)-start_time)),
 	  curr);
-  puts(msg);
-  fflush(stdout);
 #ifdef __EMSCRIPTEN__
   sprintf(msg2, "postMessage({msgType:'status',data:'%s','core':%d});", msg, core);
   emscripten_run_script(msg2);
+#else
+  puts(msg);
+  fflush(stdout);
 #endif
+  if (time(NULL)-last_report_time < 2) {
+    interval *= 2;
+  }
+  last_report_time = time(NULL);
 }
 
 int placed[WIDTH*HEIGHT], downs[WIDTH*HEIGHT];
@@ -233,8 +240,7 @@ origmain(char *argv1, char *argv2, char *argv3) {
   unsigned int rnd=0;
   nodes=nodes2=nodes3=0;
   best=0;
-  core = atoi(argv1);
-  hintcount = atoi(argv3);
+
   FILE *fp = fopen("/dev/urandom", "r");
   rnd = rnd*256+(unsigned char) getc(fp);
   rnd = rnd*256+(unsigned char) getc(fp);
@@ -243,14 +249,17 @@ origmain(char *argv1, char *argv2, char *argv3) {
   fclose(fp);
   printf("seed = %u\n", rnd);
 
-  srand(time(NULL)*1000+getpid()%1000);
-  //srand(rnd);
+  //srand(time(NULL)*1000+getpid()%1000);
+  srand(rnd);
+
+  core = atoi(argv1);
   sprintf(msg,"postMessage('core = %d');", core);
 #ifdef __EMSCRIPTEN__
   emscripten_run_script(msg);
 #else
   puts(msg);
 #endif
+
   target1 = atoll(argv2);
   sprintf(msg,"postMessage('target1 = %lld');", target1);
 #ifdef __EMSCRIPTEN__
@@ -259,7 +268,16 @@ origmain(char *argv1, char *argv2, char *argv3) {
   puts(msg);
 #endif
 
+  hintcount = atoi(argv3);
+  sprintf(msg,"postMessage('hintcount = %d');", hintcount);
+#ifdef __EMSCRIPTEN__
+  emscripten_run_script(msg);
+#else
+  puts(msg);
+#endif
+
   start_time=time(NULL);
+  last_report_time = start_time;
 
   /* if(argc > 3) { */
   /*   restoring=1; */
@@ -296,8 +314,8 @@ origmain(char *argv1, char *argv2, char *argv3) {
 int
 main() {
   //  emscripten_run_script("onmessage = function(e) { console.log('Message received from main script: ' + e.data); Module.ccall('origmain','number',['string','string','string'],['whatever','0',e.data]); }");
-  emscripten_run_script("onmessage = function(e) { console.log('Message received from main script: ' + e.data);Module.ccall('origmain','number',['string','string'],['0',e.data]);}");
-  emscripten_run_script("postMessage('message from worker');");
+  emscripten_run_script("onmessage = function(e) { console.log('Message received from main script: ' + e.data);Module.ccall('origmain','number',['string','string','string'],['0','0',e.data]);}");
+  emscripten_run_script("postMessage('worker is ready');");
   printf("and we're off...\n");
 }
 
