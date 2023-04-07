@@ -22,7 +22,7 @@
     }
 
     if(!(++nodes % 10000000)) {
-      speed_report(nodes,0);
+      speed_report(nodes, 0, pos);
     }
 
     if(pos>=best) {
