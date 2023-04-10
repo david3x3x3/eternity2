@@ -19,6 +19,11 @@ int hintcount=0;
 
 time_t start_time, last_report_time;
 
+#ifdef __EMSCRIPTEN__
+char best_buf[8192];
+int best_buf_printed=1;
+#endif
+
 void
 print_puz(int pos) {
   int i, r, c;
@@ -67,12 +72,13 @@ print_puz(int pos) {
   }
 
 #ifdef __EMSCRIPTEN__
-  sprintf(buf, "postMessage({msgType:'best',data:[");
+  sprintf(best_buf, "postMessage({msgType:'best',data:[");
   for(i=0; i<=pos; i++) {
-    sprintf(buf+strlen(buf), "[%d,%d],", fit_table2[cursors[i]]/4+1, fit_table2[cursors[i]]%4);
+    sprintf(best_buf+strlen(best_buf), "[%d,%d],", fit_table2[cursors[i]]/4+1, fit_table2[cursors[i]]%4);
   }
-  strcpy(buf+strlen(buf),"]})");
-  emscripten_run_script(buf);
+  strcpy(best_buf+strlen(best_buf),"]})");
+  best_buf_printed=0;
+  //emscripten_run_script(best_buf);
 #endif
 }
 
@@ -109,7 +115,8 @@ long long last_report=0;
 
 void
 speed_report(long long nodes, int last, int curr) {
-  static int status_num=0, interval=100000;
+  static int status_num=0;
+  static long long interval=100000;
   char msg[256];
   char msg2[256];
   if (last == 0 && nodes - last_report < interval) {
@@ -122,13 +129,17 @@ speed_report(long long nodes, int last, int curr) {
   } else {
     printf("status #%d,active=1,", status_num++);
   }
-  sprintf(msg,"nodes=%lld,time=%lld,best=%d,nmps=%.3f,depth=%d",
+  sprintf(msg,"nodes=%lld,time=%lld,best=%d,rate=%.3fm,depth=%d",
 	  nodes,
 	  time(NULL)-start_time,
 	  best,
 	  nodes/(1000000.0*(time(NULL)-start_time)),
 	  curr);
 #ifdef __EMSCRIPTEN__
+  if(!best_buf_printed) {
+    emscripten_run_script(best_buf);
+    best_buf_printed=1;
+  }
   sprintf(msg2, "postMessage({msgType:'status',data:'%s','core':%d});", msg, core);
   emscripten_run_script(msg2);
 #else
@@ -241,6 +252,7 @@ origmain(char *argv1, char *argv2, char *argv3) {
   nodes=nodes2=nodes3=0;
   best=0;
 
+#ifdef DEVRANDROM
   FILE *fp = fopen("/dev/urandom", "r");
   rnd = rnd*256+(unsigned char) getc(fp);
   rnd = rnd*256+(unsigned char) getc(fp);
@@ -248,9 +260,10 @@ origmain(char *argv1, char *argv2, char *argv3) {
   rnd = rnd*256+(unsigned char) getc(fp);
   fclose(fp);
   printf("seed = %u\n", rnd);
-
-  //srand(time(NULL)*1000+getpid()%1000);
   srand(rnd);
+#else
+  srand(time(NULL)*1000+getpid()%1000);
+#endif
 
   core = atoi(argv1);
   sprintf(msg,"postMessage('core = %d');", core);
