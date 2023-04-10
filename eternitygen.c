@@ -178,9 +178,9 @@ mysearch(int func) {
 
   if (func == 0) {
     // shuffle
-    for(j=0;j<sizeof(fit_table2)/4; j++) {
+    for(j=0;fit_table2[j] != -2; j++) {
       if(fit_table2[j] != -1) {
-	for(m=j;m<sizeof(fit_table2)/4;m++) {
+	for(m=j;;m++) {
 	  if(fit_table2[m] == -1) {
 	    break;
 	  }

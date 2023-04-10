@@ -46,13 +46,6 @@ gen(int target1, int target2, int target3) {
   
 
   for(pos=0; pos<width*height; pos++) {
-    //printf("POS%d:\n", pos);
-    //printf("    pos=%d;\n", pos);
-    //printf("    //j=fit_table2[cursors[%d]];\n", pos);
-    //puts("    //if(j >= 0) {");
-    //puts("      placed[j/4]--;");
-    //puts("    //  placed[j/4]=0;");
-    //puts("    //}");
     printf("POS%d:\n", pos);
     printf("    j = fit_table2[++cursors[%d]];\n", pos);
     puts("    if(j < 0) {");

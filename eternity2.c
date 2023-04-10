@@ -223,6 +223,8 @@ init() {
     sprintf(c, "%s%d", i==0?"":",", k);
     c += strlen(c);
   }
+  sprintf(c, ",-2");
+  c += strlen(c);
 
   sprintf(c, "}, pieces[][4] = {");
   c += strlen(c);
