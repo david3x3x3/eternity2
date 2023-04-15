@@ -11,18 +11,22 @@
 
 #include <time.h>
 
+extern void init_ssearch();
+extern int ssearch(int);
+
 #include "genheader1.c"
 long long nodes=0, nodes2=0, nodes3=0, target1, target2, save_nodes;
-int cursors[WIDTH*HEIGHT], best=0, core, restoring=0, solutions=0;
-int specialp[WIDTH*HEIGHT], special=0;
+int cursors[WIDTH*HEIGHT], best=0, bestskips=0, restoring=0, solutions=0;
+int specialp[WIDTH*HEIGHT], specials[WIDTH*HEIGHT], special=0;
 int hintcount=0;
+unsigned int core;
 
 time_t start_time, last_report_time;
 
 #ifdef __EMSCRIPTEN__
 char best_buf[8192];
-int best_buf_printed=1;
 #endif
+int best_buf_printed=1;
 
 void
 print_puz(int pos) {
@@ -72,11 +76,11 @@ print_puz(int pos) {
   }
 
 #ifdef __EMSCRIPTEN__
-  sprintf(best_buf, "postMessage({msgType:'best',data:[");
+  sprintf(best_buf, "postMessage({msgType:'best',data:[%d,[",pos);
   for(i=0; i<=pos; i++) {
     sprintf(best_buf+strlen(best_buf), "[%d,%d],", fit_table2[cursors[i]]/4+1, fit_table2[cursors[i]]%4);
   }
-  strcpy(best_buf+strlen(best_buf),"]})");
+  strcpy(best_buf+strlen(best_buf),"]]})");
   best_buf_printed=0;
   //emscripten_run_script(best_buf);
 #endif
@@ -127,12 +131,12 @@ speed_report(long long nodes, int last, int curr) {
     printf("%d solutions\n", solutions);
     printf("total ");
   } else {
-    printf("status #%d,active=1,", status_num++);
+    printf("status phase=1,");
   }
-  sprintf(msg,"nodes=%lld,time=%lld,best=%d,rate=%.3fm,depth=%d",
+  sprintf(msg,"nodes=%lld,time=%lld,best=%d,skips=%04d,rate=%.3fm,depth=%d",
 	  nodes,
 	  time(NULL)-start_time,
-	  best,
+	  best, bestskips,
 	  nodes/(1000000.0*(time(NULL)-start_time)),
 	  curr);
 #ifdef __EMSCRIPTEN__
@@ -140,7 +144,7 @@ speed_report(long long nodes, int last, int curr) {
     emscripten_run_script(best_buf);
     best_buf_printed=1;
   }
-  sprintf(msg2, "postMessage({msgType:'status',data:'%s','core':%d});", msg, core);
+  sprintf(msg2, "postMessage({msgType:'status',data:'phase=1,%s','core':%d});", msg, core);
   emscripten_run_script(msg2);
 #else
   puts(msg);
@@ -202,6 +206,18 @@ mysearch(int func) {
 	}
       }
     }
+    for (j=0;j<width*height;j++) {
+      if      (j==8)   { specials[j] =  5; } else if (j==16)  { specials[j] =  9; }
+      else if (j==32)  { specials[j] = 24; } else if (j==40)  { specials[j] = 33; }
+      else if (j==48)  { specials[j] = 42; } else if (j==56)  { specials[j] = 51; }
+      else if (j==64)  { specials[j] = 60; } else if (j==72)  { specials[j] = 68; }
+      else if (j==82)  { specials[j] = 76; } else if (j==90)  { specials[j] = 81; }
+      else if (j==102) { specials[j] = 85; } else if (j==110) { specials[j] = 89; }
+      else if (j==118) { specials[j] = 92; } else if (j==132) { specials[j] = 95; }
+      else if (j==148) { specials[j] = 97; } else if (j==160) { specials[j] = 98; }
+      else { specials[j] = 0; }
+    }
+      
 
     //init
     for(pos=0; pos<width*height; pos++) {
@@ -214,6 +230,7 @@ mysearch(int func) {
     
     //placed[0] = 1;
     cursors[0] = 2;
+    init_ssearch();
   } else if(func == 1) {
     //run
 #include "gensearch.c"
@@ -252,19 +269,6 @@ origmain(char *argv1, char *argv2, char *argv3) {
   nodes=nodes2=nodes3=0;
   best=0;
 
-#ifdef DEVRANDROM
-  FILE *fp = fopen("/dev/urandom", "r");
-  rnd = rnd*256+(unsigned char) getc(fp);
-  rnd = rnd*256+(unsigned char) getc(fp);
-  rnd = rnd*256+(unsigned char) getc(fp);
-  rnd = rnd*256+(unsigned char) getc(fp);
-  fclose(fp);
-  printf("seed = %u\n", rnd);
-  srand(rnd);
-#else
-  srand(time(NULL)*1000+getpid()%1000);
-#endif
-
   core = atoi(argv1);
   sprintf(msg,"postMessage('core = %d');", core);
 #ifdef __EMSCRIPTEN__
@@ -287,6 +291,18 @@ origmain(char *argv1, char *argv2, char *argv3) {
   emscripten_run_script(msg);
 #else
   puts(msg);
+#endif
+
+#ifdef __EMSCRIPTEN__
+  rnd = EM_ASM_INT({
+      return Math.floor(Math.random() * 2**32);
+    });
+  sprintf(msg,"postMessage('seed = %u');", rnd);
+  emscripten_run_script(msg);
+  srand(rnd);
+#else
+  //srand(time(NULL)*1000+getpid()%1000);
+  srand(core);
 #endif
 
   start_time=time(NULL);

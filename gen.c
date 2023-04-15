@@ -47,8 +47,15 @@ gen(int target1, int target2, int target3) {
 
   for(pos=0; pos<width*height; pos++) {
     printf("POS%d:\n", pos);
+    if (pos==target2) {
+      printf("    ssearch(%d);\n", pos);
+    }
     printf("    j = fit_table2[++cursors[%d]];\n", pos);
-    puts("    if(j < 0) {");
+    if (pos==target2) {
+      printf("    if(1) {");
+    } else {
+      printf("    if(j < 0 || special < specials[%d]) {", pos);
+    }
     if(pos==0) {
       puts("      printf(\"no more solutions\\n\");");
       printf("      speed_report(nodes,1,0);\n");
@@ -59,6 +66,7 @@ gen(int target1, int target2, int target3) {
 	printf("      if (hintcount < %d)\n", prev_was_hint);
       }
       printf("      placed[fit_table2[cursors[%d]]/4]=0;\n", pos-1);
+      printf("      special -= specialp[fit_table2[cursors[%d]]/4];\n", pos-1);
       printf("      goto POS%d;\n", pos-1);
     }
     puts("    }");
@@ -96,14 +104,10 @@ gen(int target1, int target2, int target3) {
 
     }
     puts("    placed[j/4]=1;");
+    puts("    special += specialp[j/4];");
     if(pos >= target1) {
       puts("    ++nodes;");
     }
-    if(pos+1 == target2) {
-      printf("    nodes3++;\n");
-      printf("    if(save_restore()) goto POS%d;\n", pos);
-    }
- 
     printf("    downs[%d]=pieces_up[j/4][(6-j%%4)%%4];\n", pos);
 
     if(pos >= target3) {
