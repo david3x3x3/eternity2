@@ -101,7 +101,7 @@ all_processes = [None]*procs
 
 def start_proc(n):
     global all_processes
-    cmd = f'./eternity2-gen.exe {n} 0 {sys.argv[2]}'
+    cmd = f'./eternity2-gen.exe {random.getrandbits(32)} 0 {sys.argv[2]} {sys.argv[3]}'
     p = Popen(cmd, stdout=PIPE, bufsize=1, close_fds=ON_POSIX)
     all_processes[n] = p
     t = Thread(target=enqueue_output, args=(p.stdout, q, n))
