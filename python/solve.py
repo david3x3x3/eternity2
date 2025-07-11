@@ -125,7 +125,14 @@ fit = dict()
 for key1, val in pieces.items():
     if val[0] == 0 and val[3] == 0 and key1[0] != 0:
         # only try one corner in top left
-        continue
+        # continue
+
+        # Only testing with the first corner at the top is good for
+        # small puzzles, but for larger puzzles I'm trying to get
+        # better first rows that may not start with the first
+        # corner. Maybe this should be a command line or config file
+        # option in the future.
+        pass
     key2 = (val[0], val[3], val[1] == 0, val[2] == 0)
     if not fit.get(key2):
         fit[key2] = []
@@ -135,6 +142,12 @@ fit1 = [1]*edgecount*edgecount*4
 fit2 = [None]*3
 fit2c = ["{-1,0}"]*3
 dummypos = -10
+
+# We could randomize here as a quick way to pick random positions, but
+# it's better to use command line args.
+# for f in sorted(fit):
+#    random.shuffle(fit[f])
+
 for f in sorted(fit):
     # print('f = ' + str(f))
     # print('  ' + str(fit[f]))
@@ -229,6 +242,8 @@ while True:
             break
         if len(search_args) > i or placed[-1] != 0:
             pos_list += [pos_copy]
+            if len(pos_list) % 1000000 == 0:
+                print(f"found {len(pos_list)} ({' '.join(['%2d/%d' % (fit2[p][0]+1, fit2[p][1]) for p in pos_copy if fit2[p]])})", flush=True)
         del placed[-1:]
     print("%d positions found with depth %d" % (len(pos_list), depth))
     if len(search_args) > i:
@@ -239,6 +254,7 @@ while True:
         else:
             j = int(search_args[i])
         pos_list = [pos_list[j],]
+        print(f'searching {[fit2[p][0]+1 for p in pos_list[0] if fit2[p]]}')
         placed = [dummypos]*width + pos_list[0]
         i += 1
         if len(search_args) > i:
@@ -251,7 +267,6 @@ while True:
                 new_pos_list = []
                 limit = len(pos_list[0])
                 depth = limit - 1
-                print('%d positions; extending to depth %d' % (len(pos_list), limit))
                 for pos in pos_list:
                     placed = [dummypos]*width + pos
                     while True:
@@ -264,6 +279,7 @@ while True:
                             new_pos_list += [pos_copy]
                         del placed[-1:]
                 pos_list = new_pos_list
+                print('%d positions after extending to depth %d' % (len(pos_list), limit))
             break
     else:
         break
@@ -328,11 +344,34 @@ start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
 nodes = 0
 last_time = 0
 
+def status(calls, nodes, workers_left, found, remain1,remain2):
+    global node_limit
+    global last_time 
+    status = 'calls={}'.format(calls)
+    status += ',nodes={}'.format(nodes)
+    status += ',active={}'.format(workers_left)
+    status += ',found={}'.format(found)
+    status += ',remain={}/{}'.format(remain1, remain2)
+    this_time = int(time.time())-start_time
+    status += ',rate={0:.2f}'.format(float(nodes)/1000000/this_time)
+    status += ',time={}'.format(this_time)
+    # rate2 is number of assignments completed per second
+    rate2 = (nassign_data[0]-wgs*cu)/this_time
+    # status += ',rate2={0:.3f}'.format(rate2)
+    # remain2 is number of days left based on remaining assignments and rate2
+    remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
+    # status += ',remain2={0:.2f}'.format(remain2)
+    if last_time != 0 and this_time == last_time:
+        node_limit *= 2
+        print('node_limit = %d' % node_limit)
+    last_time = this_time
+    print(status, flush=True)
+
 while True:
-    prog.mykernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
-                  np.int32(len(pos_list)), nassign_buffer, found_buffer,
-                  nfound_buffer, np.int32(limit), np.int32(width*height),
-                  np.int32(node_limit), lm, res_buffer)
+    kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
+           np.int32(len(pos_list)), nassign_buffer, found_buffer,
+           nfound_buffer, np.int32(limit), np.int32(width*height),
+           np.int32(node_limit), lm, res_buffer)
     calls += 1
     cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
     cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
@@ -353,25 +392,7 @@ while True:
         for i in worker_pos:
             if i != -1:
                 workers_left += 1
-        status = 'calls={}'.format(calls)
-        status += ',nodes={}'.format(nodes)
-        status += ',active={}'.format(workers_left)
-        status += ',found={}'.format(nfound_data[0]+solutions)
-        status += ',remain={}/{}'.format(nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0])
-        this_time = int(time.time())-start_time
-        status += ',rate={0:.2f}'.format(float(nodes)/1000000/this_time)
-        status += ',time={}'.format(this_time)
-        # rate2 is number of assignments completed per second
-        rate2 = (nassign_data[0]-wgs*cu)/this_time
-        # status += ',rate2={0:.3f}'.format(rate2)
-        # remain2 is number of days left based on remaining assignments and rate2
-        remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
-        # status += ',remain2={0:.2f}'.format(remain2)
-        if last_time != 0 and this_time == last_time:
-            node_limit *= 2
-            print('node_limit = %d' % node_limit)
-        last_time = this_time
-        print(status, flush=True)
+        status(calls, nodes, workers_left, nfound_data[0]+solutions, nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0])
     if nfound_data[0] > 0:
         cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
         if nfound_data[0] > max_found:
@@ -382,7 +403,7 @@ while True:
         pd2 = found_data[offset:offset2]
         #print('pd2 = {}'.format(pd2))
         solutions += 1
-        print('solution {}: {}'.format(solutions,' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]])))
+        print(f"solution {solutions}: {' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]])}", flush=True)
     nfound_data[0] = 0
     cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
     cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
