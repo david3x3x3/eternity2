@@ -367,11 +367,13 @@ def status(calls, nodes, workers_left, found, remain1,remain2):
     last_time = this_time
     print(status, flush=True)
 
+workers_left = wgs*cu
+
 while True:
     kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
            np.int32(len(pos_list)), nassign_buffer, found_buffer,
            nfound_buffer, np.int32(limit), np.int32(width*height),
-           np.int32(node_limit), lm, res_buffer)
+           np.int32(node_limit), lm, res_buffer).wait()
     calls += 1
     cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
     cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
@@ -387,7 +389,7 @@ while True:
     if last_nodes == 0:
         break
     nodes += last_nodes
-    if calls % 10 == 0:
+    if calls % 10 == 0 or workers_left < wgs*cu:
         workers_left = 0
         for i in worker_pos:
             if i != -1:
