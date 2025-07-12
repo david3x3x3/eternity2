@@ -143,7 +143,9 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
 
   results[global_id] = res;
   
-  for(i=0;i<width*height;i++) {
-    in_out[in_pos[global_id]*width*height+i] = placed[i];
+  if(in_pos[global_id] >= 0) {
+    for(i=0;i<width*height;i++) {
+      in_out[in_pos[global_id]*width*height+i] = placed[i];
+    }
   }
 }
