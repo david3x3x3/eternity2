@@ -373,7 +373,7 @@ while True:
     kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
            np.int32(len(pos_list)), nassign_buffer, found_buffer,
            nfound_buffer, np.int32(limit), np.int32(width*height),
-           np.int32(node_limit), lm, res_buffer).wait()
+           np.int32(node_limit), lm, res_buffer)
     calls += 1
     cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
     cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
