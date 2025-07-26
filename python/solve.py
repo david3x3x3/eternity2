@@ -83,20 +83,33 @@ def mysearch(placed, mindepth, maxdepth):
 # include the original position in the new list.
 
 def deepen_search(pos_list, mindepth):
+    maxdepth = mindepth+1
     nodes = 0
     new_pos_list = []
     while len(pos_list):
-        pos = pos_list[0]
-        del pos_list[0]
+        pos = pos_list.pop(0)
+        if len(pos) > maxdepth:
+            partial = pos
+            pos = pos[:maxdepth]
+            print(f'saving partially completed position: {partial}')
+            new_pos_list += [partial]
+        else:
+            partial = None
         placed = [dummypos]*width + pos
         while True:
-            nodes += mysearch(placed, mindepth, mindepth+1)
+            nodes += mysearch(placed, mindepth, maxdepth)
             pos_copy = placed[width:]
-            #print('pos_copy = %s' % str(pos_copy))
-            if len(pos_copy) <= limit:
+            if len(pos_copy) <= mindepth:
                 break
             if placed[-1] != 0:
-                new_pos_list += [pos_copy]
+                if partial:
+                    if pos_copy <= partial:
+                        print(f'skipping previously searched pos {pos_copy}')
+                    else:
+                        print(f'deepened from partial {pos_copy}')
+                        new_pos_list += [pos_copy]
+                else:
+                    new_pos_list += [pos_copy]
             del placed[-1:]
     pos_list += new_pos_list
     return nodes
@@ -300,7 +313,7 @@ while True:
             pos_list = []
         else:
             # try to figure out how far to extend the search to get 10x the number of positions as workers
-            while len(pos_list) < wgs*cu*10:
+            while len(pos_list) < wgs*cu*2:
                 limit += 1
                 nodes += deepen_search(pos_list, limit-1)
                 print('%d positions after extending to depth %d' % (len(pos_list), limit))
@@ -367,17 +380,18 @@ max_found = 0
 start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
 last_time = 0
 
-def status(calls, nodes, workers_left, found, remain1,remain2):
+def status(calls, nodes, workers_left, found, remain1, remain2, mindepth):
     global node_limit
     global last_time 
-    status = 'calls={}'.format(calls)
-    status += ',nodes={}'.format(nodes)
-    status += ',active={}'.format(workers_left)
-    status += ',found={}'.format(found)
-    status += ',remain={}/{}'.format(remain1, remain2)
+    status = f'calls={calls}'
+    status += f',nodes={nodes}'
+    status += f',active={workers_left}'
+    status += f',found={found}'
+    status += f',remain={remain1}/{remain2}'
     this_time = int(time.time())-start_time
-    status += ',rate={0:.2f}'.format(float(nodes)/1000000/this_time)
-    status += ',time={}'.format(this_time)
+    status += f',rate={float(nodes)/1000000/this_time:.2f}'
+    status += f',time={this_time}'
+    status += f',mindepth={mindepth}'
     # rate2 is number of assignments completed per second
     rate2 = (nassign_data[0]-wgs*cu)/this_time
     # status += ',rate2={0:.3f}'.format(rate2)
@@ -417,7 +431,7 @@ while True:
         for i in worker_pos:
             if i != -1:
                 workers_left += 1
-        status(calls, nodes, workers_left, nfound_data[0]+solutions, nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0])
+        status(calls, nodes, workers_left, nfound_data[0]+solutions, nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0], limit)
     if nfound_data[0] > 0:
         cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
         if nfound_data[0] > max_found:
