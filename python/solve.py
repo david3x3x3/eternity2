@@ -10,6 +10,13 @@ print('args = %s' % ' '.join(sys.argv))
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
 #os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
+# mysearch() searches the position specified by "placed" until it
+# reaches either mindepth (through backtracking), maxdepth or a
+# solution.
+#
+# The "placed" array will be passed in with an extra row of dummy
+# pieces at the top to simplify matching pieces to the row above each
+# piece.
 def mysearch(placed, mindepth, maxdepth):
     count=0
     nodes = 0
@@ -44,7 +51,7 @@ def mysearch(placed, mindepth, maxdepth):
 
         nodes += 1
 
-        if len(placed) == (width+1)*height:
+        if len(placed) == (width+1)*height: # shouldn't this be width*(height+1)?
             return nodes
             # for p in [fit2[p2] for p2 in placed[width:]]:
             #     print('/'.join(map(str,p)), end=' ')
@@ -64,6 +71,34 @@ def mysearch(placed, mindepth, maxdepth):
             return nodes
         
     #print('count = ' + str(count))
+    return nodes
+
+# deepen_search() tries to search one level deeper for ever position
+# in pos_list. This will mean that mindepth should be increased by 1
+# after deepening. The new list of positions replaces pos_list.
+# 
+# If there's a position in pos_list that is longer than mindepth, we
+# should truncate the list at mindepth, deepen by 1, remove all
+# positions up to and including the original position, and also
+# include the original position in the new list.
+
+def deepen_search(pos_list, mindepth):
+    nodes = 0
+    new_pos_list = []
+    while len(pos_list):
+        pos = pos_list[0]
+        del pos_list[0]
+        placed = [dummypos]*width + pos
+        while True:
+            nodes += mysearch(placed, mindepth, mindepth+1)
+            pos_copy = placed[width:]
+            #print('pos_copy = %s' % str(pos_copy))
+            if len(pos_copy) <= limit:
+                break
+            if placed[-1] != 0:
+                new_pos_list += [pos_copy]
+            del placed[-1:]
+    pos_list += new_pos_list
     return nodes
 
 for i in range(len(cl.get_platforms())):
@@ -211,6 +246,7 @@ print('total workers = %d' % (wgs*cu))
 # even in the top row.
 placed = [dummypos]*width+[2]
 nodes1 = 0
+nodes = 0
 
 i = 2
 
@@ -234,6 +270,7 @@ pos_list = []
 depth=0
 while True:
     while True:
+        # keep searching for more positions at the specified limit
         #print('mysearch(placed, %d, %d)' % (depth, limit))
         nodes1 += mysearch(placed, depth, limit)
         pos_copy = placed[width:]
@@ -264,21 +301,8 @@ while True:
         else:
             # try to figure out how far to extend the search to get 10x the number of positions as workers
             while len(pos_list) < wgs*cu*10:
-                new_pos_list = []
-                limit = len(pos_list[0])
-                depth = limit - 1
-                for pos in pos_list:
-                    placed = [dummypos]*width + pos
-                    while True:
-                        nodes1 += mysearch(placed, depth, limit)
-                        pos_copy = placed[width:]
-                        #print('pos_copy = %s' % str(pos_copy))
-                        if len(pos_copy) <= limit:
-                            break
-                        if placed[-1] != 0:
-                            new_pos_list += [pos_copy]
-                        del placed[-1:]
-                pos_list = new_pos_list
+                limit += 1
+                nodes += deepen_search(pos_list, limit-1)
                 print('%d positions after extending to depth %d' % (len(pos_list), limit))
             break
     else:
@@ -341,7 +365,6 @@ solutions = 0
 max_found = 0
 
 start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
-nodes = 0
 last_time = 0
 
 def status(calls, nodes, workers_left, found, remain1,remain2):
