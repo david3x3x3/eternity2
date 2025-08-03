@@ -10,6 +10,25 @@ print('args = %s' % ' '.join(sys.argv))
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
 #os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
+def print_pos(p):
+    for p0 in p:
+        if fit2[p0]:
+            print(f'{fit2[p0][0]+1}/{fit2[p0][1]}', end=' ')
+        else:
+            print(f'({p0})', end=' ')
+    print('', flush=True)
+
+def fit_check(placed, add_padding):
+    if add_padding:
+        placed[0:0] = [dummypos]*width
+    up=pieces[fit2[placed[-width]]][2]
+    left=pieces[fit2[placed[-1]]][1]
+    right = int(len(placed) % width == width - 1)
+    down = int(len(placed) // width == height)
+    placed += [fit1[((left*edgecount+up)*2+down)*2+right]-1]
+    if add_padding:
+        del placed[:width]
+
 # mysearch() searches the position specified by "placed" until it
 # reaches either mindepth (through backtracking), maxdepth or a
 # solution.
@@ -22,6 +41,7 @@ def mysearch(placed, mindepth, maxdepth):
     nodes = 0
     #print(placed)
     #print([fit2[p] for p in placed[width:]])
+
     # which pieces are placed (not positions)
     placed2 = [0]*width*height
     for p2 in [fit2[p] for p in placed[width:]]:
@@ -51,7 +71,7 @@ def mysearch(placed, mindepth, maxdepth):
 
         nodes += 1
 
-        if len(placed) == (width+1)*height: # shouldn't this be width*(height+1)?
+        if len(placed) == width*(height+1):
             return nodes
             # for p in [fit2[p2] for p2 in placed[width:]]:
             #     print('/'.join(map(str,p)), end=' ')
@@ -62,11 +82,7 @@ def mysearch(placed, mindepth, maxdepth):
             count += 1
             continue
 
-        up=pieces[fit2[placed[-width]]][2]
-        left=pieces[fit2[placed[-1]]][1]
-        right = int(len(placed) % width == width - 1)
-        down = int(len(placed) // width == height)
-        placed += [fit1[((left*edgecount+up)*2+down)*2+right]-1]
+        fit_check(placed, False)
         if len(placed) > width+maxdepth:
             return nodes
         
@@ -83,33 +99,40 @@ def mysearch(placed, mindepth, maxdepth):
 # include the original position in the new list.
 
 def deepen_search(pos_list, mindepth):
+    # print(f'start deepen_search', flush=True)
     maxdepth = mindepth+1
     nodes = 0
     new_pos_list = []
     while len(pos_list):
         pos = pos_list.pop(0)
+        # print(f'pos = {pos}')
         if len(pos) > maxdepth:
             partial = pos
             pos = pos[:maxdepth]
-            print(f'saving partially completed position: {partial}')
+            # print(f'saving partially completed position: len {len(pos)}, {partial}')
+            # print(f'and expanding {pos}')
             new_pos_list += [partial]
         else:
             partial = None
         placed = [dummypos]*width + pos
+        # print(f'pos before fit_check: {placed}')
+        # fit_check(placed, False)
         while True:
+            # print(f'calling mysearch({placed}, {mindepth}, {maxdepth})')
             nodes += mysearch(placed, mindepth, maxdepth)
+            # print(f'res = {placed}')
             pos_copy = placed[width:]
             if len(pos_copy) <= mindepth:
                 break
-            if placed[-1] != 0:
-                if partial:
-                    if pos_copy <= partial:
-                        print(f'skipping previously searched pos {pos_copy}')
-                    else:
-                        print(f'deepened from partial {pos_copy}')
-                        new_pos_list += [pos_copy]
-                else:
-                    new_pos_list += [pos_copy]
+            # if partial:
+            #     if pos_copy > partial:
+            #         new_pos_list += [pos_copy]
+            #         print(f'adding new position {pos_copy}')
+            #     else:
+            #         print(f'ignoring previously searched {pos_copy}')
+            # else:
+            #     new_pos_list += [pos_copy]
+            new_pos_list += [pos_copy]
             del placed[-1:]
     pos_list += new_pos_list
     return nodes
@@ -196,6 +219,7 @@ dummypos = -10
 # for f in sorted(fit):
 #    random.shuffle(fit[f])
 
+# print(f'fit = {fit}')
 for f in sorted(fit):
     # print('f = ' + str(f))
     # print('  ' + str(fit[f]))
@@ -204,8 +228,6 @@ for f in sorted(fit):
     pos = ((f[1]*edgecount+f[0])*2+f[3])*2+f[2]
     if f[2] and f[3]:
         dummypos = len(fit2)
-        # print('dummypos = ' + str(dummypos))
-        # print(pieces[fit[f][0]])
     if len(f3) > 0:
         fit1[pos] = len(fit2)
         fit2 = fit2 + fit[f] + [None]
@@ -217,8 +239,8 @@ fp = open('eternity2_kernel.cl','r')
 prgsrc = fp.read()
 fp.close()
 
-#print('fit1 =', fit1)
-#print('fit2c =', fit2c)
+print('fit1 =', fit1)
+print('fit2c =', fit2c)
 prgsrc = prgsrc.replace('KMEMTYPE','local')
 prgsrc = prgsrc.replace('KGLOBMEM','0')
 prgsrc = prgsrc.replace('PYPIECES',pypieces)
@@ -228,15 +250,15 @@ prgsrc = prgsrc.replace('PYEDGECOUNT',str(edgecount))
 prgsrc = prgsrc.replace('KWIDTH',str(width))
 prgsrc = prgsrc.replace('KHEIGHT',str(height))
 
-#print('src = ' + prgsrc)
+# print('src = ' + prgsrc)
 prog = cl.Program(ctx, prgsrc).build()
 kernel = prog.mykernel
 #print(kernel)
 
 print('kernel.LOCAL_MEM_SIZE = ' + str(kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)))
       
-#print('fit1 = ' + str(fit1))
-#print('fit2 = ' + str(fit2))
+# print(f'fit1 (len {len(fit1)}) = ' + str(fit1))
+# print(f'fit2 (len {len(fit2)}) = ' + str(fit2))
 
 maxcu = device.max_compute_units
 wgs = device.local_mem_size//(width*height*2)
@@ -304,7 +326,8 @@ while True:
         else:
             j = int(search_args[i])
         pos_list = [pos_list[j],]
-        print(f'searching {[fit2[p][0]+1 for p in pos_list[0] if fit2[p]]}')
+        print(f'searching ', end='')
+        print_pos(pos_list[0])
         placed = [dummypos]*width + pos_list[0]
         i += 1
         if len(search_args) > i:
@@ -316,7 +339,10 @@ while True:
             while len(pos_list) < wgs*cu*2:
                 limit += 1
                 nodes += deepen_search(pos_list, limit-1)
-                print('%d positions after extending to depth %d' % (len(pos_list), limit))
+                print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
+                # print('first 10 positions:')
+                # for p in pos_list[:10]:
+                #     print_pos(p)
             break
     else:
         break
@@ -324,16 +350,21 @@ while True:
 
 print('modified args = %s' % search_args)
 
-piece_data = np.array([0]*width*height*len(pos_list), np.int16)
-#print('START pos_list')
-for i in range(len(pos_list)):
-    pos = pos_list[i]
-    #print('{}: {}'.format(i,pos))
-    offset = width*height*i
-    for j in range(len(pos)):
-        piece_data[offset+j] = pos[j]
-    pos[limit] = -1
-#print('END pos_list')
+def list_to_np(pl):
+    piece_data = np.array([0]*width*height*len(pl), np.int16)
+    #print('START pl')
+    for i in range(len(pl)):
+        pos = pl[i]
+        #print('{}: {}'.format(i,pos))
+        offset = width*height*i
+        for j in range(len(pos)):
+            piece_data[offset+j] = pos[j]
+        # C code uses -1 for end of list. This may need fixing.
+        pos[limit] = -2
+    #print('END pl')
+    return piece_data
+
+piece_data = list_to_np(pos_list)
 
 nassign_data = np.array([1], np.int32)
 
@@ -406,6 +437,11 @@ def status(calls, nodes, workers_left, found, remain1, remain2, mindepth):
 
 workers_left = wgs*cu
 
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
 while True:
     kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
            np.int32(len(pos_list)), nassign_buffer, found_buffer,
@@ -426,12 +462,62 @@ while True:
     if last_nodes == 0:
         break
     nodes += last_nodes
+
+    if False and (len(pos_list)-nassign_data[0]) < wgs*cu:
+        # We're running out of positions for workers. deepen_search here.
+        # Trim pos_list down to only active and unsearched positions.
+        pos_list = list(chunks(piece_data.tolist(), width*height))
+        # print('first 10 positions (after chunking):')
+        # for p in pos_list[:10]:
+        #     print(f'len={len(p)}', end=' ')
+        #     print_pos(p)
+        for pos_num in worker_pos:
+            pos_list += [pos_list[pos_num]]
+        del pos_list[:nassign_data[0]]
+
+        for pos in pos_list:
+            # i = pos.index(-1) if -1 in pos else -1
+            ii = [i for i in range(len(pos)) if pos[i] < 0]
+            i = ii[0] if len(ii) else -1
+            if i >= 0:
+                del pos[i:]
+            # if pos[-1] == -1:
+            #     print('before fit_check()')
+            #     print_pos(pos)
+            #     del pos[-1]
+            #     fit_check(pos, True)
+
+        # Deepen the search
+        # print(f'trimmed pos_list len = {len(pos_list)}')
+        # print('first 10 positions:')
+        # for p in pos_list[:10]:
+        #     print(f'len={len(p)}', end=' ')
+        #     print_pos(p)
+        while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
+            limit += 1
+            nodes += deepen_search(pos_list, limit-1)
+            print('%d positions after extending to depth %d' % (len(pos_list), limit))
+        if len(pos_list) == 0:
+            break
+        piece_data = list_to_np(pos_list)
+        # reassign workers
+        for i in range(wgs*cu):
+            worker_pos[i] = i
+            nassign_data[0] = i+1
+        piece_buffer = cl.Buffer(ctx,
+                                 cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                 hostbuf=piece_data)
+    else:
+        cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
+
     if calls % 10 == 0 or workers_left < wgs*cu:
         workers_left = 0
         for i in worker_pos:
             if i != -1:
                 workers_left += 1
-        status(calls, nodes, workers_left, nfound_data[0]+solutions, nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0], limit)
+        status(calls, nodes, workers_left, nfound_data[0]+solutions,
+               nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0],
+               limit)
     if nfound_data[0] > 0:
         cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
         if nfound_data[0] > max_found:
@@ -442,9 +528,11 @@ while True:
         pd2 = found_data[offset:offset2]
         #print('pd2 = {}'.format(pd2))
         solutions += 1
-        print(f"solution {solutions}: {' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2]])}", flush=True)
+        # if True in [p2 not in fit2 for p2 in pd2.tolist()]:
+        # print(f'rawest solution {pd2.tolist()}')
+        # print(f'raw solution {[fit2[p2] for p2 in pd2.tolist()]}')
+        print(f"solution {solutions}: {' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])}", flush=True)
     nfound_data[0] = 0
-    cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
     cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
     cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
     cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)

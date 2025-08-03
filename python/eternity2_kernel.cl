@@ -35,16 +35,13 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
     placed[i] = in_out[in_pos[global_id]*width*height+i];
   }
 
-  /* results[global_id] = mysearch(placed, mindepth, limit, in_pos, max_pos, */
-  /* 				found, nfound); */
-
   int j,k,depth=-1;
   long res=0;
   short placed2[WIDTH*HEIGHT];
 
   for (i=0;i<width*height;i++) {
     placed2[i] = 0;
-    if (placed[i] > 0) {
+    if (placed[i] >= 0) {
       depth = i;
     }
   }
@@ -100,7 +97,7 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
     }
     i = ++placed[depth];
     if (fit_table2[i][0] == -1) {
-      placed[depth] = 0;
+      placed[depth] = -1;
       depth--;
       continue;
     }
