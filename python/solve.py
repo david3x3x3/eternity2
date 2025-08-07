@@ -29,6 +29,41 @@ def fit_check(placed, add_padding):
     if add_padding:
         del placed[:width]
 
+def deepen(pos, pos_list, old_depth):
+    # print(f' deepen({pos}, {pos_list})')
+    nodes = 0
+    used = set([fit2[p][0] for p in pos])
+    # partial = None
+    # if len(pos) > old_depth:
+    #     partial = list(pos)
+    #     del pos[old_depth:]
+    pos1 = [dummypos]*width + pos
+    up=pieces[fit2[pos1[-width]]][2]
+    left=pieces[fit2[pos1[-1]]][1]
+    right = int(len(pos1) % width == width - 1)
+    down = int(len(pos1) // width == height)
+    # print(f' urdl = {up}, {right}, {down}, {left}')
+    p = fit1[((left*edgecount+up)*2+down)*2+right]
+    # print(f' p = {p}')
+    while fit2[p]:
+        if fit2[p][0] not in used:
+            nodes += 1
+            pos_list += [pos + [p]]
+        p += 1
+    return nodes
+
+def deepen_list(pos_list, pos_list2, old_depth):
+    last_status = 0
+    # print(f'deepen_list({pos_list}, {pos_list2})')
+    nodes = 0
+    for pos in pos_list:
+        if nodes - last_status >= 2000000:
+            print(f'checking {" ".join([f"{p2[0]+1}/{p2[1]}" for p2 in [fit2[p] for p in pos]])}')
+            last_status = nodes
+        nodes += deepen(pos, pos_list2, old_depth)
+    # print(f'after deepen: {pos_list2}')
+    return nodes
+
 # mysearch() searches the position specified by "placed" until it
 # reaches either mindepth (through backtracking), maxdepth or a
 # solution.
@@ -240,6 +275,7 @@ prgsrc = fp.read()
 fp.close()
 
 print('fit1 =', fit1)
+print('fit2 =', fit2)
 print('fit2c =', fit2c)
 prgsrc = prgsrc.replace('KMEMTYPE','local')
 prgsrc = prgsrc.replace('KGLOBMEM','0')
@@ -301,22 +337,30 @@ print('depth limit = ' + str(limit))
 
 start_time = int(time.time())
 
-pos_list = []
+pos_list = [[]]
 depth=0
 while True:
-    while True:
-        # keep searching for more positions at the specified limit
-        #print('mysearch(placed, %d, %d)' % (depth, limit))
-        nodes1 += mysearch(placed, depth, limit)
-        pos_copy = placed[width:]
-        #print('pos copy len = %d' % len(pos_copy))
-        if len(pos_copy) <= limit:
-            break
-        if len(search_args) > i or placed[-1] != 0:
-            pos_list += [pos_copy]
-            if len(pos_list) % 1000000 == 0:
-                print(f"found {len(pos_list)} ({' '.join(['%2d/%d' % (fit2[p][0]+1, fit2[p][1]) for p in pos_copy if fit2[p]])})", flush=True)
-        del placed[-1:]
+    while depth < limit:
+        pos_list2 = []
+        nodes1 += deepen_list(pos_list, pos_list2, depth)
+        pos_list = pos_list2
+        depth += 1
+        print(f'{len(pos_list)} positions at depth {depth}, nodes = {nodes1}', flush=True)
+
+    # while True:
+    #     # keep searching for more positions at the specified limit
+    #     #print('mysearch(placed, %d, %d)' % (depth, limit))
+    #     nodes1 += mysearch(placed, depth, limit)
+    #     pos_copy = placed[width:]
+    #     #print('pos copy len = %d' % len(pos_copy))
+    #     if len(pos_copy) <= limit:
+    #         break
+    #     if len(search_args) > i or placed[-1] != 0:
+    #         pos_list += [pos_copy]
+    #         if len(pos_list) % 1000000 == 0:
+    #             print(f"found {len(pos_list)} ({' '.join(['%2d/%d' % (fit2[p][0]+1, fit2[p][1]) for p in pos_copy if fit2[p]])})", flush=True)
+    #     del placed[-1:]
+
     print("%d positions found with depth %d" % (len(pos_list), depth))
     if len(search_args) > i:
         depth = limit
@@ -337,12 +381,15 @@ while True:
         else:
             # try to figure out how far to extend the search to get 10x the number of positions as workers
             while len(pos_list) < wgs*cu*2:
+                pos_list2 = []
+                nodes += deepen_list(pos_list, pos_list2, limit)
+                pos_list = pos_list2
                 limit += 1
-                nodes += deepen_search(pos_list, limit-1)
+                # print(f'pos_list = {pos_list}')
                 print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
-                # print('first 10 positions:')
-                # for p in pos_list[:10]:
-                #     print_pos(p)
+                print('first 10 positions:')
+                for p in pos_list[:10]:
+                    print_pos(p)
             break
     else:
         break
@@ -352,17 +399,25 @@ print('modified args = %s' % search_args)
 
 def list_to_np(pl):
     piece_data = np.array([0]*width*height*len(pl), np.int16)
-    #print('START pl')
-    for i in range(len(pl)):
-        pos = pl[i]
-        #print('{}: {}'.format(i,pos))
+    for i, pos in enumerate(pl):
         offset = width*height*i
-        for j in range(len(pos)):
-            piece_data[offset+j] = pos[j]
-        # C code uses -1 for end of list. This may need fixing.
-        pos[limit] = -2
-    #print('END pl')
+        if len(pos) == limit:
+            fit_check(pos, True)
+        for j, val in enumerate(pos):
+            piece_data[offset+j] = val
+    print('DONE')
     return piece_data
+
+# filter out positions that don't have any continuations. the c code
+# seems to have problems and searches outside of the position. this
+# should probably be fixed in the c.
+pos_list2 = []
+for pos in pos_list:
+    pos2 = list(pos)
+    fit_check(pos2, True)
+    if pos2[-1] != 0:
+        pos_list2 += [pos]
+pos_list = pos_list2
 
 piece_data = list_to_np(pos_list)
 
