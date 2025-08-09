@@ -18,6 +18,15 @@ def print_pos(p):
             print(f'({p0})', end=' ')
     print('', flush=True)
 
+def pos_to_str(p):
+    res = ''
+    for p0 in p:
+        if fit2[p0]:
+            res += f'{fit2[p0][0]+1}/{fit2[p0][1]} '
+        else:
+            res += f'({p0}) '
+    return res
+
 def fit_check(placed, add_padding):
     if add_padding:
         placed[0:0] = [dummypos]*width
@@ -29,147 +38,73 @@ def fit_check(placed, add_padding):
     if add_padding:
         del placed[:width]
 
-def deepen(pos, pos_list, old_depth):
-    # print(f' deepen({pos}, {pos_list})')
+def deepen(orig_pos, pos_list, old_depth, debug):
+    pos = list(orig_pos)
+    if debug:
+        print(f'deepen(poslen={len(pos)}, pos={pos_to_str(pos)}, old_depth={old_depth})')
     nodes = 0
-    used = set([fit2[p][0] for p in pos])
-    # partial = None
-    # if len(pos) > old_depth:
-    #     partial = list(pos)
-    #     del pos[old_depth:]
+    if len(pos) > 0 and len(pos) == old_depth + 1 and not fit2[pos[-1]]:
+        del pos[-1]
+    partial = []
+    if len(pos) > old_depth:
+        partial = list(pos)
+        del pos[old_depth:]
+        pos_list += [partial]
+        if debug:
+            print(f' trimmed pos = {pos_to_str(pos)}')
     pos1 = [dummypos]*width + pos
     up=pieces[fit2[pos1[-width]]][2]
     left=pieces[fit2[pos1[-1]]][1]
     right = int(len(pos1) % width == width - 1)
     down = int(len(pos1) // width == height)
-    # print(f' urdl = {up}, {right}, {down}, {left}')
+    if debug:
+        print(f' urdl = {up}, {right}, {down}, {left}')
+    used = set([fit2[p][0] for p in pos if fit2[p]])
     p = fit1[((left*edgecount+up)*2+down)*2+right]
-    # print(f' p = {p}')
     while fit2[p]:
+        if debug:
+            print(f' {pos_to_str(pos + [p])}')
+        pos2 = pos + [p]
+        fit_check(pos2, True)
         if fit2[p][0] not in used:
-            nodes += 1
-            pos_list += [pos + [p]]
+            if pos2 > partial:
+                # count node for adding a piece even if it's trimmed due to lack of extension
+                nodes += 1
+                if pos2[-1] != 0:
+                    if debug:
+                        print('  adding position')
+                    pos_list += [pos2]
+                else:
+                    if debug:
+                        print('  no extensions beyond position')
+            else:
+                if debug:
+                    print('  position already searched')
+        else:
+            if debug:
+                print('  piece used more than once')
         p += 1
     return nodes
 
-def deepen_list(pos_list, pos_list2, old_depth):
+def deepen_list(pos_list, pos_list2, old_depth, debug):
     last_status = 0
+    if debug:
+        print(f'DEEPEN_LIST {[pos_to_str(p) for p in pos_list]}')
+        list_check = set(map(tuple, pos_list))
+        if len(list_check) != len(pos_list):
+            print('COMPLETE DUPS IN LIST!')
+            for i, p in enumerate(pos_list):
+                for p2 in pos_list[i+1:]:
+                    if p == p2:
+                        print(f' {pos_to_str(p)}')
     # print(f'deepen_list({pos_list}, {pos_list2})')
     nodes = 0
     for pos in pos_list:
         if nodes - last_status >= 2000000:
-            print(f'checking {" ".join([f"{p2[0]+1}/{p2[1]}" for p2 in [fit2[p] for p in pos]])}')
+            print(f'checking {pos_to_str(pos)}')
             last_status = nodes
-        nodes += deepen(pos, pos_list2, old_depth)
+        nodes += deepen(pos, pos_list2, old_depth, debug)
     # print(f'after deepen: {pos_list2}')
-    return nodes
-
-# mysearch() searches the position specified by "placed" until it
-# reaches either mindepth (through backtracking), maxdepth or a
-# solution.
-#
-# The "placed" array will be passed in with an extra row of dummy
-# pieces at the top to simplify matching pieces to the row above each
-# piece.
-def mysearch(placed, mindepth, maxdepth):
-    count=0
-    nodes = 0
-    #print(placed)
-    #print([fit2[p] for p in placed[width:]])
-
-    # which pieces are placed (not positions)
-    placed2 = [0]*width*height
-    for p2 in [fit2[p] for p in placed[width:]]:
-        if p2:
-            placed2[p2[0]] = 1
-
-    while len(placed)-width > mindepth:
-        i = placed[-1]
-        if fit2[i]:
-            # decrement the count of the piece we previously tried
-            placed2[fit2[i][0]] -= 1
-        # try the next piece
-        placed[-1] += 1
-        i = placed[-1]
-        if not fit2[i]:
-            # no more pieces to try here
-            del placed[-1:]
-            continue
-
-        ii = fit2[i][0]
-
-        # count how many times we have placed this piece
-        placed2[ii] += 1
-        if placed2[ii] > 1:
-            # skip if we've already placed it somewhere else
-            continue
-
-        nodes += 1
-
-        if len(placed) == width*(height+1):
-            return nodes
-            # for p in [fit2[p2] for p2 in placed[width:]]:
-            #     print('/'.join(map(str,p)), end=' ')
-            # print('')
-            print(str(count) + ': ', end = '')
-            print(' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in placed[width:]]]))
-            sys.stdout.flush()
-            count += 1
-            continue
-
-        fit_check(placed, False)
-        if len(placed) > width+maxdepth:
-            return nodes
-        
-    #print('count = ' + str(count))
-    return nodes
-
-# deepen_search() tries to search one level deeper for ever position
-# in pos_list. This will mean that mindepth should be increased by 1
-# after deepening. The new list of positions replaces pos_list.
-# 
-# If there's a position in pos_list that is longer than mindepth, we
-# should truncate the list at mindepth, deepen by 1, remove all
-# positions up to and including the original position, and also
-# include the original position in the new list.
-
-def deepen_search(pos_list, mindepth):
-    # print(f'start deepen_search', flush=True)
-    maxdepth = mindepth+1
-    nodes = 0
-    new_pos_list = []
-    while len(pos_list):
-        pos = pos_list.pop(0)
-        # print(f'pos = {pos}')
-        if len(pos) > maxdepth:
-            partial = pos
-            pos = pos[:maxdepth]
-            # print(f'saving partially completed position: len {len(pos)}, {partial}')
-            # print(f'and expanding {pos}')
-            new_pos_list += [partial]
-        else:
-            partial = None
-        placed = [dummypos]*width + pos
-        # print(f'pos before fit_check: {placed}')
-        # fit_check(placed, False)
-        while True:
-            # print(f'calling mysearch({placed}, {mindepth}, {maxdepth})')
-            nodes += mysearch(placed, mindepth, maxdepth)
-            # print(f'res = {placed}')
-            pos_copy = placed[width:]
-            if len(pos_copy) <= mindepth:
-                break
-            # if partial:
-            #     if pos_copy > partial:
-            #         new_pos_list += [pos_copy]
-            #         print(f'adding new position {pos_copy}')
-            #     else:
-            #         print(f'ignoring previously searched {pos_copy}')
-            # else:
-            #     new_pos_list += [pos_copy]
-            new_pos_list += [pos_copy]
-            del placed[-1:]
-    pos_list += new_pos_list
     return nodes
 
 for i in range(len(cl.get_platforms())):
@@ -342,24 +277,10 @@ depth=0
 while True:
     while depth < limit:
         pos_list2 = []
-        nodes1 += deepen_list(pos_list, pos_list2, depth)
+        nodes1 += deepen_list(pos_list, pos_list2, depth, False)
         pos_list = pos_list2
         depth += 1
         print(f'{len(pos_list)} positions at depth {depth}, nodes = {nodes1}', flush=True)
-
-    # while True:
-    #     # keep searching for more positions at the specified limit
-    #     #print('mysearch(placed, %d, %d)' % (depth, limit))
-    #     nodes1 += mysearch(placed, depth, limit)
-    #     pos_copy = placed[width:]
-    #     #print('pos copy len = %d' % len(pos_copy))
-    #     if len(pos_copy) <= limit:
-    #         break
-    #     if len(search_args) > i or placed[-1] != 0:
-    #         pos_list += [pos_copy]
-    #         if len(pos_list) % 1000000 == 0:
-    #             print(f"found {len(pos_list)} ({' '.join(['%2d/%d' % (fit2[p][0]+1, fit2[p][1]) for p in pos_copy if fit2[p]])})", flush=True)
-    #     del placed[-1:]
 
     print("%d positions found with depth %d" % (len(pos_list), depth))
     if len(search_args) > i:
@@ -382,7 +303,7 @@ while True:
             # try to figure out how far to extend the search to get 10x the number of positions as workers
             while len(pos_list) < wgs*cu*2:
                 pos_list2 = []
-                nodes += deepen_list(pos_list, pos_list2, limit)
+                nodes += deepen_list(pos_list, pos_list2, limit, False)
                 pos_list = pos_list2
                 limit += 1
                 # print(f'pos_list = {pos_list}')
@@ -398,26 +319,27 @@ while True:
 print('modified args = %s' % search_args)
 
 def list_to_np(pl):
-    piece_data = np.array([0]*width*height*len(pl), np.int16)
+    piece_data = np.array([-1]*width*height*len(pl), np.int16)
     for i, pos in enumerate(pl):
-        offset = width*height*i
-        if len(pos) == limit:
-            fit_check(pos, True)
+        # print(f'encoding pos {i}: {pos_to_str(pos)} ({pos})')
         for j, val in enumerate(pos):
-            piece_data[offset+j] = val
-    print('DONE')
+            if j < width*height:
+                piece_data[width*height*i+j] = val
     return piece_data
 
 # filter out positions that don't have any continuations. the c code
 # seems to have problems and searches outside of the position. this
 # should probably be fixed in the c.
-pos_list2 = []
-for pos in pos_list:
-    pos2 = list(pos)
-    fit_check(pos2, True)
-    if pos2[-1] != 0:
-        pos_list2 += [pos]
-pos_list = pos_list2
+def trim_pos_list(pos_list):
+    pos_list2 = []
+    for pos in pos_list:
+        pos2 = list(pos)
+        fit_check(pos2, True)
+        if pos2[-1] != 0:
+            pos_list2 += [pos]
+    return pos_list2
+
+# pos_list = trim_pos_list(pos_list)
 
 piece_data = list_to_np(pos_list)
 
@@ -460,7 +382,11 @@ res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
 
 solcount = 0
 calls = 0
-solutions = 0
+solcount = 0
+with open('solutions.txt', 'r') as fp:
+    prev_solutions = [s.strip() for s in fp.readlines()]
+# print(f'prev = {prev_solutions}')
+solutions = []
 max_found = 0
 
 start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
@@ -498,6 +424,7 @@ def chunks(lst, n):
         yield lst[i:i + n]
 
 while True:
+    # print('running kernel')
     kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
            np.int32(len(pos_list)), nassign_buffer, found_buffer,
            nfound_buffer, np.int32(limit), np.int32(width*height),
@@ -518,61 +445,6 @@ while True:
         break
     nodes += last_nodes
 
-    if False and (len(pos_list)-nassign_data[0]) < wgs*cu:
-        # We're running out of positions for workers. deepen_search here.
-        # Trim pos_list down to only active and unsearched positions.
-        pos_list = list(chunks(piece_data.tolist(), width*height))
-        # print('first 10 positions (after chunking):')
-        # for p in pos_list[:10]:
-        #     print(f'len={len(p)}', end=' ')
-        #     print_pos(p)
-        for pos_num in worker_pos:
-            pos_list += [pos_list[pos_num]]
-        del pos_list[:nassign_data[0]]
-
-        for pos in pos_list:
-            # i = pos.index(-1) if -1 in pos else -1
-            ii = [i for i in range(len(pos)) if pos[i] < 0]
-            i = ii[0] if len(ii) else -1
-            if i >= 0:
-                del pos[i:]
-            # if pos[-1] == -1:
-            #     print('before fit_check()')
-            #     print_pos(pos)
-            #     del pos[-1]
-            #     fit_check(pos, True)
-
-        # Deepen the search
-        # print(f'trimmed pos_list len = {len(pos_list)}')
-        # print('first 10 positions:')
-        # for p in pos_list[:10]:
-        #     print(f'len={len(p)}', end=' ')
-        #     print_pos(p)
-        while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
-            limit += 1
-            nodes += deepen_search(pos_list, limit-1)
-            print('%d positions after extending to depth %d' % (len(pos_list), limit))
-        if len(pos_list) == 0:
-            break
-        piece_data = list_to_np(pos_list)
-        # reassign workers
-        for i in range(wgs*cu):
-            worker_pos[i] = i
-            nassign_data[0] = i+1
-        piece_buffer = cl.Buffer(ctx,
-                                 cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                 hostbuf=piece_data)
-    else:
-        cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
-
-    if calls % 10 == 0 or workers_left < wgs*cu:
-        workers_left = 0
-        for i in worker_pos:
-            if i != -1:
-                workers_left += 1
-        status(calls, nodes, workers_left, nfound_data[0]+solutions,
-               nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0],
-               limit)
     if nfound_data[0] > 0:
         cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
         if nfound_data[0] > max_found:
@@ -582,16 +454,79 @@ while True:
         offset2 = (i+1)*width*height
         pd2 = found_data[offset:offset2]
         #print('pd2 = {}'.format(pd2))
-        solutions += 1
+        solcount += 1
         # if True in [p2 not in fit2 for p2 in pd2.tolist()]:
         # print(f'rawest solution {pd2.tolist()}')
         # print(f'raw solution {[fit2[p2] for p2 in pd2.tolist()]}')
-        print(f"solution {solutions}: {' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])}", flush=True)
+        solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])
+        solutions += [solstr]
+        print(f"solution {solcount}: {solstr}", flush=True)
+
+    # if False and (len(pos_list)-nassign_data[0]) < wgs*cu:
+    if (len(pos_list)-nassign_data[0]) < wgs*cu:
+        # We're running out of positions for workers. deepen_search here.
+        # Trim pos_list down to only active and unsearched positions.
+        pos_list = list(chunks(piece_data.tolist(), width*height))
+        untouched = pos_list[nassign_data[0]:]
+        touched = [pos_list[pos_num] for pos_num in worker_pos if pos_num != -1]
+        pos_list = touched + untouched
+        for posnum, pos in enumerate(pos_list):
+            if -1 in pos:
+                del pos[pos.index(-1):]
+            # print(f'posnum={posnum},limit={limit}, len={len(pos)}, pos=', end='')
+            # print_pos(pos)
+        pos_list2 = []
+        while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
+            pos_list2 = []
+            nodes += deepen_list(pos_list, pos_list2, limit, False)
+            pos_list = pos_list2
+            limit += 1
+            print('%d positions after extending to depth %d' % (len(pos_list), limit))
+            if limit == width*height:
+                print('found solutions by deepening:')
+                for pos in pos_list:
+                    del pos[width*height:]
+                    solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pos]])
+                    solutions += [solstr]
+                    solcount += 1
+                    print(f'solution {solcount}: {solstr}')
+                pos_list = []
+        if len(pos_list) == 0:
+            break
+        
+        # pos_list = trim_pos_list(pos_list)
+        piece_data = list_to_np(pos_list)
+        # reassign workers
+        for i in range(wgs*cu):
+            worker_pos[i] = i
+        nassign_data[0] = wgs*cu
+        piece_buffer = cl.Buffer(ctx,
+                                 cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                 hostbuf=piece_data)
+    else:
+        cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
+
+    if calls % 10 == 0:
+        workers_left = 0
+        for i in worker_pos:
+            if i != -1:
+                workers_left += 1
+        status(calls, nodes, workers_left, nfound_data[0]+solcount,
+               nassign_data[0]-wgs*cu,len(pos_list)-nassign_data[0],
+               limit)
+        
     nfound_data[0] = 0
     cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
     cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
     cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
     
 print('nodes = {}'.format(nodes+nodes1))
-print('num solutions = {}'.format(solutions))
+print('num solutions = {}'.format(solcount))
 print('max_found = {}'.format(max_found))
+# print('begin check missing')
+# for s in prev_solutions:
+#     if s not in solutions:
+#         print(s)
+# print('end check missing')
+# with open('solutions.txt', 'w') as fp:
+#     fp.write('\n'.join(solutions + [""]))
