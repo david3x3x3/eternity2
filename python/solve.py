@@ -10,14 +10,6 @@ print('args = %s' % ' '.join(sys.argv))
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
 #os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
-def print_pos(p):
-    for p0 in p:
-        if fit2[p0]:
-            print(f'{fit2[p0][0]+1}/{fit2[p0][1]}', end=' ')
-        else:
-            print(f'({p0})', end=' ')
-    print('', flush=True)
-
 def pos_to_str(p):
     res = ''
     for p0 in p:
@@ -26,6 +18,9 @@ def pos_to_str(p):
         else:
             res += f'({p0}) '
     return res
+
+def print_pos(p):
+    print(pos_to_str(p), flush=True)
 
 def fit_check(placed, add_padding):
     if add_padding:
@@ -97,14 +92,12 @@ def deepen_list(pos_list, pos_list2, old_depth, debug):
                 for p2 in pos_list[i+1:]:
                     if p == p2:
                         print(f' {pos_to_str(p)}')
-    # print(f'deepen_list({pos_list}, {pos_list2})')
     nodes = 0
     for pos in pos_list:
         if nodes - last_status >= 2000000:
-            print(f'checking {pos_to_str(pos)}')
+            print(f'checking {pos_to_str(pos)}', flush=True)
             last_status = nodes
         nodes += deepen(pos, pos_list2, old_depth, debug)
-    # print(f'after deepen: {pos_list2}')
     return nodes
 
 for i in range(len(cl.get_platforms())):
@@ -209,9 +202,9 @@ fp = open('eternity2_kernel.cl','r')
 prgsrc = fp.read()
 fp.close()
 
-print('fit1 =', fit1)
-print('fit2 =', fit2)
-print('fit2c =', fit2c)
+# print('fit1 =', fit1)
+# print('fit2 =', fit2)
+# print('fit2c =', fit2c)
 prgsrc = prgsrc.replace('KMEMTYPE','local')
 prgsrc = prgsrc.replace('KGLOBMEM','0')
 prgsrc = prgsrc.replace('PYPIECES',pypieces)
@@ -308,9 +301,6 @@ while True:
                 limit += 1
                 # print(f'pos_list = {pos_list}')
                 print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
-                print('first 10 positions:')
-                for p in pos_list[:10]:
-                    print_pos(p)
             break
     else:
         break
@@ -326,20 +316,6 @@ def list_to_np(pl):
             if j < width*height:
                 piece_data[width*height*i+j] = val
     return piece_data
-
-# filter out positions that don't have any continuations. the c code
-# seems to have problems and searches outside of the position. this
-# should probably be fixed in the c.
-def trim_pos_list(pos_list):
-    pos_list2 = []
-    for pos in pos_list:
-        pos2 = list(pos)
-        fit_check(pos2, True)
-        if pos2[-1] != 0:
-            pos_list2 += [pos]
-    return pos_list2
-
-# pos_list = trim_pos_list(pos_list)
 
 piece_data = list_to_np(pos_list)
 
@@ -383,9 +359,6 @@ res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
 solcount = 0
 calls = 0
 solcount = 0
-with open('solutions.txt', 'r') as fp:
-    prev_solutions = [s.strip() for s in fp.readlines()]
-# print(f'prev = {prev_solutions}')
 solutions = []
 max_found = 0
 
@@ -455,9 +428,6 @@ while True:
         pd2 = found_data[offset:offset2]
         #print('pd2 = {}'.format(pd2))
         solcount += 1
-        # if True in [p2 not in fit2 for p2 in pd2.tolist()]:
-        # print(f'rawest solution {pd2.tolist()}')
-        # print(f'raw solution {[fit2[p2] for p2 in pd2.tolist()]}')
         solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])
         solutions += [solstr]
         print(f"solution {solcount}: {solstr}", flush=True)
@@ -494,7 +464,6 @@ while True:
         if len(pos_list) == 0:
             break
         
-        # pos_list = trim_pos_list(pos_list)
         piece_data = list_to_np(pos_list)
         # reassign workers
         for i in range(wgs*cu):
@@ -523,10 +492,3 @@ while True:
 print('nodes = {}'.format(nodes+nodes1))
 print('num solutions = {}'.format(solcount))
 print('max_found = {}'.format(max_found))
-# print('begin check missing')
-# for s in prev_solutions:
-#     if s not in solutions:
-#         print(s)
-# print('end check missing')
-# with open('solutions.txt', 'w') as fp:
-#     fp.write('\n'.join(solutions + [""]))
