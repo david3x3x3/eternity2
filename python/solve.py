@@ -37,6 +37,8 @@ def deepen(orig_pos, pos_list, old_depth, debug):
     pos = list(orig_pos)
     if debug:
         print(f'deepen(poslen={len(pos)}, pos={pos_to_str(pos)}, old_depth={old_depth})')
+    if len(pos) <= old_depth:
+        return 0
     nodes = 0
     if len(pos) > 0 and len(pos) == old_depth + 1 and not fit2[pos[-1]]:
         del pos[-1]
@@ -62,13 +64,16 @@ def deepen(orig_pos, pos_list, old_depth, debug):
         pos2 = pos + [p]
         fit_check(pos2, True)
         if fit2[p][0] not in used:
-            if pos2 > partial:
+            if pos2 > partial and (len(partial) >= len(pos2) or pos + [p] > partial):
                 # count node for adding a piece even if it's trimmed due to lack of extension
                 nodes += 1
                 if pos2[-1] != 0:
                     if debug:
                         print('  adding position')
                     pos_list += [pos2]
+                    if pos2 == partial:
+                        print('this should never happen')
+                        sys.exit(0)
                 else:
                     if debug:
                         print('  no extensions beyond position')
@@ -265,7 +270,9 @@ print('depth limit = ' + str(limit))
 
 start_time = int(time.time())
 
-pos_list = [[]]
+pos = []
+fit_check(pos, True)
+pos_list = [pos]
 depth=0
 while True:
     while depth < limit:
@@ -451,7 +458,7 @@ while True:
             nodes += deepen_list(pos_list, pos_list2, limit, False)
             pos_list = pos_list2
             limit += 1
-            print('%d positions after extending to depth %d' % (len(pos_list), limit))
+            print('%d positions after extending to depth %d' % (len(pos_list), limit), flush=True)
             if limit == width*height:
                 print('found solutions by deepening:')
                 for pos in pos_list:
