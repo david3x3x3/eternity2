@@ -33,6 +33,8 @@ def fit_check(placed, add_padding):
     if add_padding:
         del placed[:width]
 
+do_trace = False
+
 def deepen(orig_pos, src, pos_list, src_list, old_depth, debug):
     pos = list(orig_pos)
     # if len(pos) < old_depth:
@@ -53,7 +55,8 @@ def deepen(orig_pos, src, pos_list, src_list, old_depth, debug):
         del pos[old_depth:]
         if len(partial) > old_depth+1:
             pos_list += [partial]
-            src_list += [src + pos_to_str(partial) + '\n']
+            if do_trace:
+                src_list += [src + pos_to_str(partial) + '\n']
         if debug:
             print(f' trimmed pos = {pos_to_str(pos)}')
     pos1 = [dummypos]*width + pos
@@ -82,7 +85,8 @@ def deepen(orig_pos, src, pos_list, src_list, old_depth, debug):
                     if debug:
                         print('  adding position')
                     pos_list += [pos2]
-                    src_list += [src + pos_to_str(pos2) + '\n']
+                    if do_trace:
+                        src_list += [src + pos_to_str(pos2) + '\n']
                     if pos2 == partial:
                         print('this should never happen')
                         sys.exit(0)
@@ -114,7 +118,7 @@ def deepen_list(pos_list, src_list, pos_list2, src_list2, old_depth, debug):
         if nodes - last_status >= 2000000:
             print(f'checking {pos_to_str(pos)}', flush=True)
             last_status = nodes
-        nodes += deepen(pos, src_list[i], pos_list2, src_list2, old_depth, debug)
+        nodes += deepen(pos, src_list[i] if do_trace else [], pos_list2, src_list2, old_depth, debug)
     return nodes
 
 for i in range(len(cl.get_platforms())):
@@ -491,11 +495,12 @@ while True:
         # Trim pos_list down to only active and unsearched positions.
         pos_list = list(chunks(piece_data.tolist(), width*height))
         untouched = pos_list[nassign_data[0]:]
-        untouched_src = src_list[nassign_data[0]:]
         touched = [pos_list[pos_num] for pos_num in worker_pos if pos_num != -1]
-        touched_src = [src_list[pos_num] for pos_num in worker_pos if pos_num != -1]
         pos_list = touched + untouched
-        src_list = touched_src + untouched_src
+        if do_trace:
+            untouched_src = src_list[nassign_data[0]:]
+            touched_src = [src_list[pos_num] for pos_num in worker_pos if pos_num != -1]
+            src_list = touched_src + untouched_src
         # if len(pos_list) > len(set(map(tuple, pos_list))):
         #     print('dups in pos_list')
         #     print(f'len(touched) = {len(touched)}')
