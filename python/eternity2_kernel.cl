@@ -15,21 +15,21 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
 		       int max_pos, __global int* nassign,
 		       __global short* found, __global int* nfound,
 		       int mindepth, int maxdepth, int limit,
-		       __local short *localbuf, __global int *results) {
-  int i,local_id, global_id;
+		       __local short *localbuf, __global int *results,
+		       __global short *g_best) {
+  int i;
+  short best;
+  int local_id = get_local_id(0);
+  int global_id = get_global_id(0);
+  int local_size = get_local_size(0);
+  int group_id = get_group_id(0);
   MEMTYPE short *placed;
   
-  // i = atomic_inc(nfound);
-
-  global_id = get_global_id(0);
-
   if(in_pos[global_id] < 0) {
     results[global_id] = 0;
     return;
   }
   
-  local_id = get_local_id(0);
-
   placed = localbuf + local_id*width*height;
   for(i=0;i<width*height;i++) {
     placed[i] = in_out[in_pos[global_id]*width*height+i];
@@ -42,7 +42,7 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
   for (i=0;i<width*height;i++) {
     placed2[i] = 0;
     if (placed[i] >= 0) {
-      depth = i;
+      best = depth = i;
     }
   }
   for (i=0;i<=depth;i++) {
@@ -112,7 +112,9 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
       break;
     }
 		   
-    depth++;
+    if(++depth > best) {
+      best = depth;
+    }
 
     if(depth < width*height) {
       k = placed[(depth-1)];
@@ -139,6 +141,7 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
   }
 
   results[global_id] = res;
+  g_best[global_id] = best;
   
   if(in_pos[global_id] >= 0) {
     for(i=0;i<width*height;i++) {

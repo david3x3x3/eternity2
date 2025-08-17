@@ -389,6 +389,10 @@ nfound_buffer = cl.Buffer(ctx,
 res_data = np.array([0]*wgs*cu, np.int32)
 res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
 
+best = 0
+best_data = np.array([0]*wgs*cu, np.int16)
+best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*2)
+
 solcount = 0
 calls = 0
 solcount = 0
@@ -398,7 +402,7 @@ max_found = 0
 start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
 last_time = 0
 
-def status(calls, nodes, workers_left, found, remain1, remain2, mindepth):
+def status(calls, nodes, workers_left, found, remain1, remain2, mindepth, best):
     global node_limit
     global last_time 
     status = f'calls={calls}'
@@ -410,6 +414,7 @@ def status(calls, nodes, workers_left, found, remain1, remain2, mindepth):
     status += f',rate={float(nodes)/1000000/this_time:.2f}'
     status += f',time={this_time}'
     status += f',mindepth={mindepth}'
+    status += f',best={best}'
     # rate2 is number of assignments completed per second
     rate2 = (nassign_data[0]-wgs*cu)/this_time
     # status += ',rate2={0:.3f}'.format(rate2)
@@ -434,14 +439,15 @@ while True:
     kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
            np.int32(len(pos_list)), nassign_buffer, found_buffer,
            nfound_buffer, np.int32(limit), np.int32(width*height),
-           np.int32(node_limit), lm, res_buffer)
+           np.int32(node_limit), lm, res_buffer, best_buffer)
     calls += 1
     cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
     cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
     cl._enqueue_read_buffer(queue, nassign_buffer, nassign_data)
     #cl._enqueue_read_buffer(queue, found_buffer, found_data)
     cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
-    cl._enqueue_read_buffer(queue, res_buffer, res_data).wait()
+    cl._enqueue_read_buffer(queue, res_buffer, res_data)
+    cl._enqueue_read_buffer(queue, best_buffer, best_data).wait()
     if nassign_data[0] > len(pos_list):
         nassign_data[0] = len(pos_list)
     last_nodes = 0
@@ -450,6 +456,10 @@ while True:
     if last_nodes == 0:
         break
     nodes += last_nodes
+
+    for i in range(wgs*cu):
+        if best_data[i] > best:
+            best = best_data[i]
 
     if nfound_data[0] > 0:
         cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
@@ -523,6 +533,8 @@ while True:
             src_list = src_list2
             limit += 1
             print('%d positions after extending to depth %d' % (len(pos_list), limit), flush=True)
+            if len(pos_list) > 0 and limit > best:
+                best = limit;
             if limit == width*height:
                 print('found solutions by deepening:')
                 for pos in pos_list:
@@ -552,7 +564,7 @@ while True:
             if i != -1:
                 workers_left += 1
         status(calls, nodes, workers_left, solcount, nassign_data[0]-wgs*cu,
-               len(pos_list)-nassign_data[0], limit)
+               len(pos_list)-nassign_data[0], limit, best)
         
     nfound_data[0] = 0
     cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
@@ -561,4 +573,5 @@ while True:
     
 print('nodes = {}'.format(nodes+nodes1))
 print('num solutions = {}'.format(solcount))
-print('max_found = {}'.format(max_found))
+# print('max_found = {}'.format(max_found))
+print(f'best = {best}')
