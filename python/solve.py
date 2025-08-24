@@ -127,7 +127,7 @@ if __name__ == '__main__':
     parser.add_argument("--clinfo", help="print OpenCL information and exit", action="store_true")
     parser.add_argument("--platform", help="OpenCL platform number", type=int, default=0)
     parser.add_argument("--device", help="OpenCL device number", type=int, default=0)
-    parser.add_argument("--puzzle", help="puzzle file", type=str)
+    parser.add_argument("--puzzle", help="puzzle name, e.g. 10x10_1", type=str)
     parser.add_argument("--partial", help="specifying which part of a puzzle to search (e.g. 10,r) for rowsize 10, random row", type=str)
 
     args = parser.parse_args()
@@ -137,9 +137,6 @@ if __name__ == '__main__':
         for j in range(len(p.get_devices())):
             d = p.get_devices()[j]
             print('  Device ' + str(j) + ': ' + str(d.name) + ' (' + str(d.type) + ')')
-
-    if args.clinfo:
-        sys.exit(0)
 
     platform = cl.get_platforms()[args.platform]
     device = platform.get_devices()[args.device]
@@ -162,6 +159,9 @@ if __name__ == '__main__':
     print("Device max work group size:", device.max_work_group_size)
     print("Device max work item sizes:", device.max_work_item_sizes)
 
+    if args.clinfo:
+        sys.exit(0)
+
     ctx = cl.Context([device])
     print('ctx = {}'.format(ctx))
     queue = cl.CommandQueue(ctx)
@@ -171,7 +171,10 @@ if __name__ == '__main__':
 
     #print('reading piece data')
     # read the piece definition file
-    fp=open(args.puzzle,'r')
+    puzzname = args.puzzle.split('_')[0]
+    puzzset = args.puzzle.split('_')[1]
+    fn = f'pieces_set_{puzzset}/pieces_{puzzname}.txt'
+    fp=open(fn,'r')
     width, height = list(map(int,fp.readline().strip('\n').split(' ')))
     pieces = dict()
     piecenum=0
@@ -190,16 +193,16 @@ if __name__ == '__main__':
 
     fit = dict()
     for key1, val in pieces.items():
-        if val[0] == 0 and val[3] == 0 and key1[0] != 0:
-            # only try one corner in top left
-            # continue
+        # if val[0] == 0 and val[3] == 0 and key1[0] != 0:
+        #     # only try one corner in top left
+        #     # continue
 
-            # Only testing with the first corner at the top is good for
-            # small puzzles, but for larger puzzles I'm trying to get
-            # better first rows that may not start with the first
-            # corner. Maybe this should be a command line or config file
-            # option in the future.
-            pass
+        #     # Only testing with the first corner at the top is good for
+        #     # small puzzles, but for larger puzzles I'm trying to get
+        #     # better first rows that may not start with the first
+        #     # corner. Maybe this should be a command line or config file
+        #     # option in the future.
+        #     pass
         key2 = (val[0], val[3], val[1] == 0, val[2] == 0)
         if not fit.get(key2):
             fit[key2] = []
@@ -303,18 +306,54 @@ if __name__ == '__main__':
     pos_list = [pos]
     src_list = [""]
     depth=0
+    arg_shortcut = False
     while True:
-        while depth < limit:
-            pos_list2 = []
-            src_list2 = []
-            nodes1 += deepen_list(pos_list, src_list, pos_list2, src_list2, depth, False)
-            pos_list = pos_list2
-            src_list = src_list2
-            depth += 1
-            print(f'{len(pos_list)} positions at depth {depth}, nodes = {nodes1}', flush=True)
-
+        if depth == 0:
+            fn = f'{puzzname}-{limit}-cached.txt'
+            if os.path.exists(fn):
+                depth = limit
+                with open(fn, 'r') as fp:
+                    pos_list = []
+                    print(f'reading stored row data')
+                    lines = fp.readlines()
+                    print(f'search_args = {search_args}, i = {i}')
+                    if i+1 == len(search_args):
+                        # just pick one row
+                        if search_args[i] == 'r':
+                            #this probably defeats my goals of not reading lots of stuff into memory
+                            j = random.randrange(len(lines)) 
+                            search_args[i] = '%d*' % j
+                        else:
+                            j = int(search_args[i])
+                        line = lines[j]
+                        pos_list = [list(map(int,line.strip().split(',')))]
+                        arg_shortcut = True
+                    else:
+                        for linenum, line in enumerate(lines):
+                            if linenum % 1000000 == 0:
+                                print(f'line {linenum}', flush=True)
+                            elif linenum % 100000 == 0:
+                                print(f'.', end='', flush=True)
+                            pos_list += [list(map(int,line.strip().split(',')))]
+            else:
+                while depth < limit:
+                    pos_list2 = []
+                    src_list2 = []
+                    nodes1 += deepen_list(pos_list, src_list, pos_list2, src_list2, depth, False)
+                    pos_list = pos_list2
+                    src_list = src_list2
+                    depth += 1
+                    print(f'{len(pos_list)} positions at depth {depth}, nodes = {nodes1}', flush=True)
+                print('saving row search for future runs')
+                if len(pos_list) >= 1000000:
+                    with open(fn, 'w') as fp:
+                        for p in pos_list:
+                            fp.write(','.join(map(str,p)) + '\n')
+        if arg_shortcut == True:
+            break
         print("%d positions found with depth %d" % (len(pos_list), depth))
         if len(search_args) > i:
+            print(f'search_args[{i}] == {search_args[i]}')
             depth = limit
             if search_args[i] == 'r':
                 j = random.randrange(len(pos_list))
@@ -331,19 +370,19 @@ if __name__ == '__main__':
                 i += 1
                 pos_list = []
             else:
-                # try to figure out how far to extend the search to get 10x the number of positions as workers
-                while len(pos_list) < wgs*cu*2:
-                    pos_list2 = []
-                    src_list2 = []
-                    nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
-                    pos_list = pos_list2
-                    src_list = src_list2
-                    limit += 1
-                    # print(f'pos_list = {pos_list}')
-                    print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
                 break
-        else:
-            break
+        # break # gotta fix nested --partial arguments
+
+    # try to figure out how far to extend the search to get 10x the number of positions as workers
+    while len(pos_list) < wgs*cu*2:
+        pos_list2 = []
+        src_list2 = []
+        nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
+        pos_list = pos_list2
+        src_list = src_list2
+        limit += 1
+        # print(f'pos_list = {pos_list}')
+        print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
     #print('{}: pos_list = {}'.format(len(pos_list), pos_list))
 
     print('modified args = %s' % search_args)
