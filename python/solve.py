@@ -127,6 +127,7 @@ if __name__ == '__main__':
     parser.add_argument("--clinfo", help="print OpenCL information and exit", action="store_true")
     parser.add_argument("--platform", help="OpenCL platform number", type=int, default=0)
     parser.add_argument("--device", help="OpenCL device number", type=int, default=0)
+    parser.add_argument("--maxcu", help="max compute units", type=int)
     parser.add_argument("--puzzle", help="puzzle name, e.g. 10x10_1", type=str)
     parser.add_argument("--partial", help="specifying which part of a puzzle to search (e.g. 10,r) for rowsize 10, random row", type=str)
 
@@ -272,6 +273,8 @@ if __name__ == '__main__':
 
     print('wgs = ' + str(wgs))
     cu = device.max_compute_units
+    if args.maxcu:
+        cu = min(cu, args.maxcu)
     print('cu = ' + str(cu))
     lm = cl.LocalMemory(wgs*(width*height*2))
     print('total workers = %d' % (wgs*cu))
@@ -315,20 +318,23 @@ if __name__ == '__main__':
                 with open(fn, 'r') as fp:
                     pos_list = []
                     print(f'reading stored row data')
-                    lines = fp.readlines()
                     print(f'search_args = {search_args}, i = {i}')
                     if i+1 == len(search_args):
                         # just pick one row
                         if search_args[i] == 'r':
                             #this probably defeats my goals of not reading lots of stuff into memory
+                            lines = fp.readlines()
                             j = random.randrange(len(lines)) 
                             search_args[i] = '%d*' % j
+                            line = lines[j]
                         else:
-                            j = int(search_args[i])
-                        line = lines[j]
+                            for j, line in enumerate(fp):
+                                if j == int(search_args[i]):
+                                    break
                         pos_list = [list(map(int,line.strip().split(',')))]
                         arg_shortcut = True
                     else:
+                        lines = fp.readlines()
                         for linenum, line in enumerate(lines):
                             if linenum % 1000000 == 0:
                                 print(f'line {linenum}', flush=True)
