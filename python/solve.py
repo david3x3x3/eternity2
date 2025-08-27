@@ -310,6 +310,7 @@ if __name__ == '__main__':
     src_list = [""]
     depth=0
     arg_shortcut = False
+    prev_pct = 1.0
     while True:
         if depth == 0:
             fn = f'{puzzname}-{limit}-cached.txt'
@@ -472,6 +473,7 @@ if __name__ == '__main__':
         status += f',time={this_time}'
         status += f',mindepth={mindepth}'
         status += f',best={best}'
+        status += f',complete={100*(1-prev_pct*(workers_left+remain2)/(remain1+remain2+workers_left)):.02f}%'
         # rate2 is number of assignments completed per second
         rate2 = (nassign_data[0]-wgs*cu)/this_time
         # status += ',rate2={0:.3f}'.format(rate2)
@@ -565,6 +567,12 @@ if __name__ == '__main__':
             # We're running out of positions for workers. deepen_search here.
             # Trim pos_list down to only active and unsearched positions.
             pos_list = list(chunks(piece_data.tolist(), width*height))
+
+            remain1 = nassign_data[0]-wgs*cu
+            remain2 = len(pos_list)-nassign_data[0]
+            prev_pct *= (workers_left+remain2)/(remain1+remain2+workers_left)
+
+            print(f'prev_pct = {prev_pct}')
             untouched = pos_list[nassign_data[0]:]
             touched = [pos_list[pos_num] for pos_num in worker_pos if pos_num != -1]
             pos_list = touched + untouched
