@@ -6,6 +6,12 @@ import time
 import os
 import random
 import argparse
+import requests
+import socket
+from datetime import datetime
+import json
+from requests.auth import HTTPDigestAuth
+
 print('args = %s' % ' '.join(sys.argv))
 
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
@@ -130,6 +136,8 @@ if __name__ == '__main__':
     parser.add_argument("--maxcu", help="max compute units", type=int)
     parser.add_argument("--puzzle", help="puzzle name, e.g. 10x10_1", type=str)
     parser.add_argument("--partial", help="specifying which part of a puzzle to search (e.g. 10,r) for rowsize 10, random row", type=str)
+    parser.add_argument("--reporter", help="name or alias of person reporting result (may be public)", type=str)
+    parser.add_argument("--noreport", help="don't report the results", action="store_true")
 
     args = parser.parse_args()
     for i in range(len(cl.get_platforms())):
@@ -279,368 +287,390 @@ if __name__ == '__main__':
     lm = cl.LocalMemory(wgs*(width*height*2))
     print('total workers = %d' % (wgs*cu))
 
-    # which pieces are in each location. we put a row of blank pieces at
-    # the top so that we can always match the piece above the current one,
-    # even in the top row.
-    placed = [dummypos]*width+[2]
-    nodes1 = 0
-    nodes = 0
-
-    i = 0
-
-    node_limit = 16
-    print('node limit = ' + str(node_limit))
-
-    search_args = args.partial.split(',') if args.partial else []
-    print('search_args = %s' % search_args)
-    if len(search_args) <= i:
-        # default to searching the whole puzzle
-        search_args += [0, 0]
-
-    limit=int(search_args[i])
-    i += 1
-
-    print('depth limit = ' + str(limit))
-
-    start_time = int(time.time())
-
-    pos = []
-    fit_check(pos, True)
-    pos_list = [pos]
-    src_list = [""]
-    depth=0
-    arg_shortcut = False
-    prev_pct = 1.0
     while True:
-        if depth == 0:
-            fn = f'{puzzname}-{limit}-cached.txt'
-            if os.path.exists(fn):
-                depth = limit
-                with open(fn, 'r') as fp:
-                    pos_list = []
-                    print(f'reading stored row data')
-                    print(f'search_args = {search_args}, i = {i}')
-                    if i+1 == len(search_args):
-                        # just pick one row
-                        if search_args[i] == 'r':
-                            #this probably defeats my goals of not reading lots of stuff into memory
-                            lines = fp.readlines()
-                            j = random.randrange(len(lines)) 
-                            search_args[i] = '%d*' % j
-                            line = lines[j]
+        # which pieces are in each location. we put a row of blank pieces at
+        # the top so that we can always match the piece above the current one,
+        # even in the top row.
+        placed = [dummypos]*width+[2]
+        nodes1 = 0
+        nodes = 0
+        i = 0
+        node_limit = 16
+        print('node limit = ' + str(node_limit))
+
+        search_args = args.partial.split(',') if args.partial else []
+        print('search_args = %s' % search_args)
+        if len(search_args) <= i:
+            # default to searching the whole puzzle
+            search_args += [0, 0]
+
+        limit=int(search_args[i])
+        i += 1
+
+        print('depth limit = ' + str(limit))
+
+        start_time = int(time.time())
+
+        pos = []
+        fit_check(pos, True)
+        pos_list = [pos]
+        src_list = [""]
+        depth=0
+        arg_shortcut = False
+        prev_pct = 1.0
+        while True:
+            if depth == 0:
+                fn = f'{puzzname}-{limit}-cached.txt'
+                if os.path.exists(fn):
+                    depth = limit
+                    with open(fn, 'r') as fp:
+                        pos_list = []
+                        print(f'reading stored row data')
+                        print(f'search_args = {search_args}, i = {i}')
+                        if i+1 == len(search_args):
+                            # just pick one row
+                            if search_args[i] == 'r':
+                                #this probably defeats my goals of not reading lots of stuff into memory
+                                lines = fp.readlines()
+                                j = random.randrange(len(lines)) 
+                                search_args[i] = str(j)
+                                line = lines[j]
+                            else:
+                                for j, line in enumerate(fp):
+                                    if j == int(search_args[i]):
+                                        break
+                            pos_list = [list(map(int,line.strip().split(',')))]
+                            arg_shortcut = True
                         else:
-                            for j, line in enumerate(fp):
-                                if j == int(search_args[i]):
-                                    break
-                        pos_list = [list(map(int,line.strip().split(',')))]
-                        arg_shortcut = True
-                    else:
-                        lines = fp.readlines()
-                        for linenum, line in enumerate(lines):
-                            if linenum % 1000000 == 0:
-                                print(f'line {linenum}', flush=True)
-                            elif linenum % 100000 == 0:
-                                print(f'.', end='', flush=True)
-                            pos_list += [list(map(int,line.strip().split(',')))]
+                            lines = fp.readlines()
+                            for linenum, line in enumerate(lines):
+                                if linenum % 1000000 == 0:
+                                    print(f'line {linenum}', flush=True)
+                                elif linenum % 100000 == 0:
+                                    print(f'.', end='', flush=True)
+                                pos_list += [list(map(int,line.strip().split(',')))]
+                else:
+                    while depth < limit:
+                        pos_list2 = []
+                        src_list2 = []
+                        nodes1 += deepen_list(pos_list, src_list, pos_list2, src_list2, depth, False)
+                        pos_list = pos_list2
+                        src_list = src_list2
+                        depth += 1
+                        print(f'{len(pos_list)} positions at depth {depth}, nodes = {nodes1}', flush=True)
+                    print('saving row search for future runs')
+                    if len(pos_list) >= 1000000:
+                        with open(fn, 'w') as fp:
+                            for p in pos_list:
+                                fp.write(','.join(map(str,p)) + '\n')
+            if arg_shortcut == True:
+                break
+            print("%d positions found with depth %d" % (len(pos_list), depth))
+            if len(search_args) > i:
+                print(f'search_args[{i}] == {search_args[i]}')
+                depth = limit
+                if search_args[i] == 'r':
+                    j = random.randrange(len(pos_list))
+                    search_args[i] = str(j)
+                else:
+                    j = int(search_args[i])
+                pos_list = [pos_list[j],]
+                print(f'searching ', end='')
+                print_pos(pos_list[0])
+                placed = [dummypos]*width + pos_list[0]
+                i += 1
+                if len(search_args) > i:
+                    limit = int(search_args[i])
+                    i += 1
+                    pos_list = []
+                else:
+                    break
+            # break # gotta fix nested --partial arguments
+
+        row_num = int(search_args[-1])
+
+        # try to figure out how far to extend the search to get 10x the number of positions as workers
+        while len(pos_list) < wgs*cu*2:
+            pos_list2 = []
+            src_list2 = []
+            nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
+            pos_list = pos_list2
+            src_list = src_list2
+            limit += 1
+            # print(f'pos_list = {pos_list}')
+            print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
+        #print('{}: pos_list = {}'.format(len(pos_list), pos_list))
+
+        print('modified args = %s' % search_args)
+
+        def list_to_np(pl):
+            piece_data = np.array([-1]*width*height*len(pl), np.int16)
+            for i, pos in enumerate(pl):
+                # print(f'encoding pos {i}: {pos_to_str(pos)} ({pos})')
+                for j, val in enumerate(pos):
+                    if j < width*height:
+                        piece_data[width*height*i+j] = val
+            return piece_data
+
+        piece_data = list_to_np(pos_list)
+
+        nassign_data = np.array([1], np.int32)
+
+        worker_pos = np.array([0]*wgs*cu, np.int32)
+        for i in range(wgs*cu):
+            if i > len(pos_list):
+                worker_pos[i] = -1
             else:
-                while depth < limit:
+                worker_pos[i] = i
+                nassign_data[0] = i+1
+
+        nassign_buffer = cl.Buffer(ctx,
+                                  cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                  hostbuf=nassign_data)
+
+        piece_buffer = cl.Buffer(ctx,
+                                 cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                 hostbuf=piece_data)
+
+        worker_buffer = cl.Buffer(ctx,
+                                  cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                  hostbuf=worker_pos)
+
+        # len(pos_list) is just a guess at the max results per kernel run
+        #found_limit = 1000
+        found_limit = 200
+        found_data = np.array([0]*width*height*found_limit, np.int16)
+        found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY,
+                                 found_limit*width*height*2)
+
+        nfound_data = np.array([0], np.int32)
+        nfound_buffer = cl.Buffer(ctx,
+                                  cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                  hostbuf=nfound_data)
+
+        # # I ended up not using this, but may be necessary if we want to trace
+        # # solutions back to the positions they came from:
+        # found_src = np.array([0]*found_limit, np.int32)
+        # found_src_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, found_limit*4)
+
+        res_data = np.array([0]*wgs*cu, np.int32)
+        res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
+
+        best = 0
+        best_data = np.array([0]*wgs*cu, np.int16)
+        best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*2)
+
+        solcount = 0
+        calls = 0
+        solcount = 0
+        solutions = []
+        max_found = 0
+
+        start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
+        last_time = 0
+
+        def status(calls, nodes, workers_left, found, remain1, remain2, mindepth, best):
+            global node_limit
+            global last_time 
+            status = f'calls={calls}'
+            status += f',nodes={nodes}'
+            status += f',active={workers_left}'
+            status += f',found={found}'
+            status += f',remain={remain1}/{remain2}'
+            this_time = int(time.time())-start_time
+            status += f',rate={float(nodes)/1000000/this_time:.2f}'
+            status += f',time={this_time}'
+            status += f',mindepth={mindepth}'
+            status += f',best={best}'
+            status += f',complete={100*(1-prev_pct*(workers_left+remain2)/(remain1+remain2+workers_left)):.02f}%'
+            # rate2 is number of assignments completed per second
+            rate2 = (nassign_data[0]-wgs*cu)/this_time
+            # status += ',rate2={0:.3f}'.format(rate2)
+            # remain2 is number of days left based on remaining assignments and rate2
+            remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
+            # status += ',remain2={0:.2f}'.format(remain2)
+            if last_time != 0 and this_time - last_time < 2:
+                node_limit *= 2
+                print('node_limit = %d' % node_limit)
+            last_time = this_time
+            print(status, flush=True)
+
+        workers_left = wgs*cu
+
+        def chunks(lst, n):
+            """Yield successive n-sized chunks from lst."""
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
+
+        while True:
+            # print('running kernel')
+            kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
+                   np.int32(len(pos_list)), nassign_buffer, found_buffer,
+                   nfound_buffer, np.int32(limit), np.int32(width*height),
+                   np.int32(node_limit), lm, res_buffer, best_buffer)
+            calls += 1
+            cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
+            cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
+            cl._enqueue_read_buffer(queue, nassign_buffer, nassign_data)
+            #cl._enqueue_read_buffer(queue, found_buffer, found_data)
+            cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
+            cl._enqueue_read_buffer(queue, res_buffer, res_data)
+            cl._enqueue_read_buffer(queue, best_buffer, best_data).wait()
+            if nassign_data[0] > len(pos_list):
+                nassign_data[0] = len(pos_list)
+            # last_nodes = 0
+            # for i in range(wgs*cu):
+            #     last_nodes += int(res_data[i])
+            last_nodes = int(res_data.sum())
+            if last_nodes == 0:
+                break
+            nodes += last_nodes
+
+            this_best = int(best_data.max())
+            if this_best > best:
+                best = this_best
+            # for i in range(wgs*cu):
+            #     if best_data[i] > best:
+            #         best = best_data[i]
+
+            if nfound_data[0] > 0:
+                cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
+                if nfound_data[0] > max_found:
+                    max_found = nfound_data[0]
+            for i in range(nfound_data[0]):
+                offset = i*width*height
+                offset2 = (i+1)*width*height
+                pd2 = found_data[offset:offset2]
+                #print('pd2 = {}'.format(pd2))
+                solcount += 1
+                solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])
+                solutions += [solstr]
+                print(f"solution {solcount}: {solstr}", flush=True)
+
+            # DEBUG CODE FOR DUPS
+            # pos_list2 = list(chunks(piece_data.tolist(), width*height))
+            # untouched = pos_list2[nassign_data[0]:]
+            # touched = [pos_list2[pos_num] for pos_num in worker_pos if pos_num != -1]
+            # pos_list2 = touched + untouched
+            # if len(pos_list2) > len(set(map(tuple, pos_list2))):
+            #     print('dups in pos_list2', flush=True)
+            #     pos_list2 = list(chunks(piece_data.tolist(), width*height))
+            #     complete = set()
+            #     for i in range(nassign_data[0]):
+            #         if i not in worker_pos:
+            #             complete.add(i)
+            #     for i, pos in enumerate(pos_list2):
+            #         if i in complete:
+            #             continue
+            #         for j, pos2 in enumerate(pos_list2):
+            #             if j in complete:
+            #                 continue
+            #             if i < j and pos == pos2:
+            #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}', flush=True)
+            #                 print(f'{i}: {src_list[i]}')
+            #                 print(f'{j}: {src_list[j]}')
+            #                 sys.exit(0)
+
+            # if False and (len(pos_list)-nassign_data[0]) < wgs*cu:
+            if (len(pos_list)-nassign_data[0]) < wgs*cu:
+                # We're running out of positions for workers. deepen_search here.
+                # Trim pos_list down to only active and unsearched positions.
+                pos_list = list(chunks(piece_data.tolist(), width*height))
+
+                remain1 = nassign_data[0]-wgs*cu
+                remain2 = len(pos_list)-nassign_data[0]
+                prev_pct *= (workers_left+remain2)/(remain1+remain2+workers_left)
+
+                untouched = pos_list[nassign_data[0]:]
+                touched = [pos_list[pos_num] for pos_num in worker_pos if pos_num != -1]
+                pos_list = touched + untouched
+                if do_trace:
+                    untouched_src = src_list[nassign_data[0]:]
+                    touched_src = [src_list[pos_num] for pos_num in worker_pos if pos_num != -1]
+                    src_list = touched_src + untouched_src
+                # if len(pos_list) > len(set(map(tuple, pos_list))):
+                #     print('dups in pos_list')
+                #     print(f'len(touched) = {len(touched)}')
+                #     print(f'len(untouched) = {len(untouched)}')
+                #     for i, pos in enumerate(pos_list):
+                #         for j, pos2 in enumerate(pos_list):
+                #             if i < j and pos == pos2:
+                #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}')
+                #     sys.exit(0)
+                for posnum, pos in enumerate(pos_list):
+                    if -1 in pos:
+                        del pos[pos.index(-1):]
+                    # print(f'posnum={posnum},limit={limit}, len={len(pos)}, pos=', end='')
+                    # print_pos(pos)
+                while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
                     pos_list2 = []
                     src_list2 = []
-                    nodes1 += deepen_list(pos_list, src_list, pos_list2, src_list2, depth, False)
+                    nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
                     pos_list = pos_list2
                     src_list = src_list2
-                    depth += 1
-                    print(f'{len(pos_list)} positions at depth {depth}, nodes = {nodes1}', flush=True)
-                print('saving row search for future runs')
-                if len(pos_list) >= 1000000:
-                    with open(fn, 'w') as fp:
-                        for p in pos_list:
-                            fp.write(','.join(map(str,p)) + '\n')
-        if arg_shortcut == True:
-            break
-        print("%d positions found with depth %d" % (len(pos_list), depth))
-        if len(search_args) > i:
-            print(f'search_args[{i}] == {search_args[i]}')
-            depth = limit
-            if search_args[i] == 'r':
-                j = random.randrange(len(pos_list))
-                search_args[i] = '%d*' % j
+                    limit += 1
+                    print('%d positions after extending to depth %d' % (len(pos_list), limit), flush=True)
+                    if len(pos_list) > 0 and limit > best:
+                        best = limit;
+                    if limit == width*height:
+                        print('found solutions by deepening:')
+                        for pos in pos_list:
+                            del pos[width*height:]
+                            solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pos]])
+                            solutions += [solstr]
+                            solcount += 1
+                            print(f'solution {solcount}: {solstr}')
+                        pos_list = []
+                if len(pos_list) == 0:
+                    break
+
+                piece_data = list_to_np(pos_list)
+                # reassign workers
+                for i in range(wgs*cu):
+                    worker_pos[i] = i
+                nassign_data[0] = wgs*cu
+                piece_buffer = cl.Buffer(ctx,
+                                         cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
+                                         hostbuf=piece_data)
             else:
-                j = int(search_args[i])
-            pos_list = [pos_list[j],]
-            print(f'searching ', end='')
-            print_pos(pos_list[0])
-            placed = [dummypos]*width + pos_list[0]
-            i += 1
-            if len(search_args) > i:
-                limit = int(search_args[i])
-                i += 1
-                pos_list = []
-            else:
-                break
-        # break # gotta fix nested --partial arguments
+                cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
 
-    # try to figure out how far to extend the search to get 10x the number of positions as workers
-    while len(pos_list) < wgs*cu*2:
-        pos_list2 = []
-        src_list2 = []
-        nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
-        pos_list = pos_list2
-        src_list = src_list2
-        limit += 1
-        # print(f'pos_list = {pos_list}')
-        print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
-    #print('{}: pos_list = {}'.format(len(pos_list), pos_list))
+            if calls % 10 == 0:
+                workers_left = 0
+                for i in worker_pos:
+                    if i != -1:
+                        workers_left += 1
+                status(calls, nodes, workers_left, solcount, nassign_data[0]-wgs*cu,
+                       len(pos_list)-nassign_data[0], limit, best)
 
-    print('modified args = %s' % search_args)
+            nfound_data[0] = 0
+            cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
+            cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
+            cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
 
-    def list_to_np(pl):
-        piece_data = np.array([-1]*width*height*len(pl), np.int16)
-        for i, pos in enumerate(pl):
-            # print(f'encoding pos {i}: {pos_to_str(pos)} ({pos})')
-            for j, val in enumerate(pos):
-                if j < width*height:
-                    piece_data[width*height*i+j] = val
-        return piece_data
-
-    piece_data = list_to_np(pos_list)
-
-    nassign_data = np.array([1], np.int32)
-
-    worker_pos = np.array([0]*wgs*cu, np.int32)
-    for i in range(wgs*cu):
-        if i > len(pos_list):
-            worker_pos[i] = -1
-        else:
-            worker_pos[i] = i
-            nassign_data[0] = i+1
-
-    nassign_buffer = cl.Buffer(ctx,
-                              cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                              hostbuf=nassign_data)
-
-    piece_buffer = cl.Buffer(ctx,
-                             cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                             hostbuf=piece_data)
-
-    worker_buffer = cl.Buffer(ctx,
-                              cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                              hostbuf=worker_pos)
-
-    # len(pos_list) is just a guess at the max results per kernel run
-    #found_limit = 1000
-    found_limit = 200
-    found_data = np.array([0]*width*height*found_limit, np.int16)
-    found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY,
-                             found_limit*width*height*2)
-
-    nfound_data = np.array([0], np.int32)
-    nfound_buffer = cl.Buffer(ctx,
-                              cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                              hostbuf=nfound_data)
-
-    # # I ended up not using this, but may be necessary if we want to trace
-    # # solutions back to the positions they came from:
-    # found_src = np.array([0]*found_limit, np.int32)
-    # found_src_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, found_limit*4)
-
-    res_data = np.array([0]*wgs*cu, np.int32)
-    res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
-
-    best = 0
-    best_data = np.array([0]*wgs*cu, np.int16)
-    best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*2)
-
-    solcount = 0
-    calls = 0
-    solcount = 0
-    solutions = []
-    max_found = 0
-
-    start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
-    last_time = 0
-
-    def status(calls, nodes, workers_left, found, remain1, remain2, mindepth, best):
-        global node_limit
-        global last_time 
-        status = f'calls={calls}'
-        status += f',nodes={nodes}'
-        status += f',active={workers_left}'
-        status += f',found={found}'
-        status += f',remain={remain1}/{remain2}'
-        this_time = int(time.time())-start_time
-        status += f',rate={float(nodes)/1000000/this_time:.2f}'
-        status += f',time={this_time}'
-        status += f',mindepth={mindepth}'
-        status += f',best={best}'
-        status += f',complete={100*(1-prev_pct*(workers_left+remain2)/(remain1+remain2+workers_left)):.02f}%'
-        # rate2 is number of assignments completed per second
-        rate2 = (nassign_data[0]-wgs*cu)/this_time
-        # status += ',rate2={0:.3f}'.format(rate2)
-        # remain2 is number of days left based on remaining assignments and rate2
-        remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
-        # status += ',remain2={0:.2f}'.format(remain2)
-        if last_time != 0 and this_time - last_time < 2:
-            node_limit *= 2
-            print('node_limit = %d' % node_limit)
-        last_time = this_time
-        print(status, flush=True)
-
-    workers_left = wgs*cu
-
-    def chunks(lst, n):
-        """Yield successive n-sized chunks from lst."""
-        for i in range(0, len(lst), n):
-            yield lst[i:i + n]
-
-    while True:
-        # print('running kernel')
-        kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
-               np.int32(len(pos_list)), nassign_buffer, found_buffer,
-               nfound_buffer, np.int32(limit), np.int32(width*height),
-               np.int32(node_limit), lm, res_buffer, best_buffer)
-        calls += 1
-        cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
-        cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
-        cl._enqueue_read_buffer(queue, nassign_buffer, nassign_data)
-        #cl._enqueue_read_buffer(queue, found_buffer, found_data)
-        cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
-        cl._enqueue_read_buffer(queue, res_buffer, res_data)
-        cl._enqueue_read_buffer(queue, best_buffer, best_data).wait()
-        if nassign_data[0] > len(pos_list):
-            nassign_data[0] = len(pos_list)
-        # last_nodes = 0
-        # for i in range(wgs*cu):
-        #     last_nodes += int(res_data[i])
-        last_nodes = int(res_data.sum())
-        if last_nodes == 0:
+        print('nodes = {}'.format(nodes+nodes1))
+        print('num solutions = {}'.format(solcount))
+        # print('max_found = {}'.format(max_found))
+        print(f'best = {best}')
+        url = "https://puzzlingaddiction.com/e2db/store_result"
+        payload = {
+            "puzzle": args.puzzle,
+            "row_num": row_num,
+            "nodes": nodes,
+            "best": best,
+            "solutions": solcount,
+            "reporter": args.reporter if args.reporter else 'anonymous',
+            "hostname": socket.gethostname(),
+            "update_dttm": datetime.now().isoformat()
+        }
+        print(f'payload = {payload}')
+        if args.noreport:
             break
-        nodes += last_nodes
-
-        this_best = best_data.max()
-        if this_best > best:
-            best = this_best
-        # for i in range(wgs*cu):
-        #     if best_data[i] > best:
-        #         best = best_data[i]
-
-        if nfound_data[0] > 0:
-            cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
-            if nfound_data[0] > max_found:
-                max_found = nfound_data[0]
-        for i in range(nfound_data[0]):
-            offset = i*width*height
-            offset2 = (i+1)*width*height
-            pd2 = found_data[offset:offset2]
-            #print('pd2 = {}'.format(pd2))
-            solcount += 1
-            solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])
-            solutions += [solstr]
-            print(f"solution {solcount}: {solstr}", flush=True)
-
-        # DEBUG CODE FOR DUPS
-        # pos_list2 = list(chunks(piece_data.tolist(), width*height))
-        # untouched = pos_list2[nassign_data[0]:]
-        # touched = [pos_list2[pos_num] for pos_num in worker_pos if pos_num != -1]
-        # pos_list2 = touched + untouched
-        # if len(pos_list2) > len(set(map(tuple, pos_list2))):
-        #     print('dups in pos_list2', flush=True)
-        #     pos_list2 = list(chunks(piece_data.tolist(), width*height))
-        #     complete = set()
-        #     for i in range(nassign_data[0]):
-        #         if i not in worker_pos:
-        #             complete.add(i)
-        #     for i, pos in enumerate(pos_list2):
-        #         if i in complete:
-        #             continue
-        #         for j, pos2 in enumerate(pos_list2):
-        #             if j in complete:
-        #                 continue
-        #             if i < j and pos == pos2:
-        #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}', flush=True)
-        #                 print(f'{i}: {src_list[i]}')
-        #                 print(f'{j}: {src_list[j]}')
-        #                 sys.exit(0)
-
-        # if False and (len(pos_list)-nassign_data[0]) < wgs*cu:
-        if (len(pos_list)-nassign_data[0]) < wgs*cu:
-            # We're running out of positions for workers. deepen_search here.
-            # Trim pos_list down to only active and unsearched positions.
-            pos_list = list(chunks(piece_data.tolist(), width*height))
-
-            remain1 = nassign_data[0]-wgs*cu
-            remain2 = len(pos_list)-nassign_data[0]
-            prev_pct *= (workers_left+remain2)/(remain1+remain2+workers_left)
-
-            print(f'prev_pct = {prev_pct}')
-            untouched = pos_list[nassign_data[0]:]
-            touched = [pos_list[pos_num] for pos_num in worker_pos if pos_num != -1]
-            pos_list = touched + untouched
-            if do_trace:
-                untouched_src = src_list[nassign_data[0]:]
-                touched_src = [src_list[pos_num] for pos_num in worker_pos if pos_num != -1]
-                src_list = touched_src + untouched_src
-            # if len(pos_list) > len(set(map(tuple, pos_list))):
-            #     print('dups in pos_list')
-            #     print(f'len(touched) = {len(touched)}')
-            #     print(f'len(untouched) = {len(untouched)}')
-            #     for i, pos in enumerate(pos_list):
-            #         for j, pos2 in enumerate(pos_list):
-            #             if i < j and pos == pos2:
-            #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}')
-            #     sys.exit(0)
-            for posnum, pos in enumerate(pos_list):
-                if -1 in pos:
-                    del pos[pos.index(-1):]
-                # print(f'posnum={posnum},limit={limit}, len={len(pos)}, pos=', end='')
-                # print_pos(pos)
-            while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
-                pos_list2 = []
-                src_list2 = []
-                nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
-                pos_list = pos_list2
-                src_list = src_list2
-                limit += 1
-                print('%d positions after extending to depth %d' % (len(pos_list), limit), flush=True)
-                if len(pos_list) > 0 and limit > best:
-                    best = limit;
-                if limit == width*height:
-                    print('found solutions by deepening:')
-                    for pos in pos_list:
-                        del pos[width*height:]
-                        solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pos]])
-                        solutions += [solstr]
-                        solcount += 1
-                        print(f'solution {solcount}: {solstr}')
-                    pos_list = []
-            if len(pos_list) == 0:
-                break
-
-            piece_data = list_to_np(pos_list)
-            # reassign workers
-            for i in range(wgs*cu):
-                worker_pos[i] = i
-            nassign_data[0] = wgs*cu
-            piece_buffer = cl.Buffer(ctx,
-                                     cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                     hostbuf=piece_data)
-        else:
-            cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
-
-        if calls % 10 == 0:
-            workers_left = 0
-            for i in worker_pos:
-                if i != -1:
-                    workers_left += 1
-            status(calls, nodes, workers_left, solcount, nassign_data[0]-wgs*cu,
-                   len(pos_list)-nassign_data[0], limit, best)
-
-        nfound_data[0] = 0
-        cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
-        cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
-        cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
-
-    print('nodes = {}'.format(nodes+nodes1))
-    print('num solutions = {}'.format(solcount))
-    # print('max_found = {}'.format(max_found))
-    print(f'best = {best}')
+        with open('password.txt','r') as fp:
+            password = fp.readlines()[0].strip()
+        auth_object = HTTPDigestAuth('reporter', password)
+        response = requests.post(url, json=json.dumps(payload), auth=auth_object)
+        print(f'response status = {response.status_code}')
+        print(response.text)
+        if not response.ok:
+            break
