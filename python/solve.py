@@ -330,11 +330,18 @@ if __name__ == '__main__':
                         if i+1 == len(search_args):
                             # just pick one row
                             if search_args[i] == 'r':
-                                #this probably defeats my goals of not reading lots of stuff into memory
-                                lines = fp.readlines()
-                                j = random.randrange(len(lines)) 
-                                search_args[i] = str(j)
-                                line = lines[j]
+                                if fn == '10x10-10-cached.txt':
+                                    j = random.randrange(19864204)
+                                    search_args[i] = str(j)
+                                    while j >= 0:
+                                        line = fp.readline()
+                                        j -= 1
+                                else:
+                                    #this probably defeats my goals of not reading lots of stuff into memory
+                                    lines = fp.readlines()
+                                    j = random.randrange(len(lines))
+                                    search_args[i] = str(j)
+                                    line = lines[j]
                             else:
                                 for j, line in enumerate(fp):
                                     if j == int(search_args[i]):
