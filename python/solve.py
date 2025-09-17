@@ -129,6 +129,15 @@ def deepen_list(pos_list, src_list, pos_list2, src_list2, old_depth, debug):
         nodes += deepen(pos, src_list[i] if do_trace else [], pos_list2, src_list2, old_depth, debug)
     return nodes
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--clinfo", help="print OpenCL information and exit", action="store_true")
@@ -184,7 +193,7 @@ if __name__ == '__main__':
     puzzname = args.puzzle.split('_')[0]
     puzzset = args.puzzle.split('_')[1]
     fn = f'pieces_set_{puzzset}/pieces_{puzzname}.txt'
-    fp=open(fn,'r')
+    fp=open(resource_path(fn),'r')
     width, height = list(map(int,fp.readline().strip('\n').split(' ')))
     pieces = dict()
     piecenum=0
@@ -244,7 +253,7 @@ if __name__ == '__main__':
         else:
             fit1[pos] = 2
 
-    fp = open('eternity2_kernel.cl','r')
+    fp = open(resource_path('eternity2_kernel.cl'),'r')
     prgsrc = fp.read()
     fp.close()
 
@@ -674,7 +683,7 @@ if __name__ == '__main__':
         print(f'payload = {payload}')
         if args.noreport:
             break
-        with open('password.txt','r') as fp:
+        with open(resource_path('password.txt'),'r') as fp:
             password = fp.readlines()[0].strip()
         auth_object = HTTPDigestAuth('reporter', password)
         response = requests.post(url, json=json.dumps(payload), auth=auth_object)

@@ -1,0 +1,1 @@
+venv\Scripts\pyinstaller --onefile --add-data "password.txt:." --add-data "pieces_set_1:pieces_set_1" --add-data "pieces_set_2:pieces_set_2" --add-data "eternity2_kernel.cl:." --hidden-import requests -F solve.py
