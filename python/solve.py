@@ -8,9 +8,10 @@ import random
 import argparse
 import requests
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from requests.auth import HTTPDigestAuth
+import pytz
 
 print('args = %s' % ' '.join(sys.argv))
 
@@ -661,7 +662,7 @@ if __name__ == '__main__':
             "solutions": solcount,
             "reporter": args.reporter if args.reporter else 'anonymous',
             "hostname": socket.gethostname(),
-            "update_dttm": datetime.now().isoformat()
+            "update_dttm": datetime.now(pytz.timezone('US/Pacific')).isoformat()
         }
         print(f'payload = {payload}')
         if args.noreport:
