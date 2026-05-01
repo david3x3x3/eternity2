@@ -192,6 +192,7 @@ if __name__ == '__main__':
     # read the piece definition file
     puzzname = args.puzzle.split('_')[0]
     puzzset = args.puzzle.split('_')[1]
+    random_partial = False
     fn = f'pieces_set_{puzzset}/pieces_{puzzname}.txt'
     fp=open(resource_path(fn),'r')
     width, height = list(map(int,fp.readline().strip('\n').split(' ')))
@@ -387,6 +388,7 @@ if __name__ == '__main__':
                 print(f'search_args[{i}] == {search_args[i]}')
                 depth = limit
                 if search_args[i] == 'r':
+                    random_partial = True
                     j = random.randrange(len(pos_list))
                     search_args[i] = str(j)
                 else:
@@ -681,13 +683,14 @@ if __name__ == '__main__':
             "update_dttm": datetime.now(pytz.timezone('US/Pacific')).isoformat()
         }
         print(f'payload = {payload}')
-        if args.noreport:
-            break
-        with open(resource_path('password.txt'),'r') as fp:
-            password = fp.readlines()[0].strip()
-        auth_object = HTTPDigestAuth('reporter', password)
-        response = requests.post(url, json=json.dumps(payload), auth=auth_object)
-        print(f'response status = {response.status_code}')
-        print(response.text)
-        if not response.ok:
+        if not args.noreport:
+            with open(resource_path('password.txt'),'r') as fp:
+                password = fp.readlines()[0].strip()
+            auth_object = HTTPDigestAuth('reporter', password)
+            response = requests.post(url, json=json.dumps(payload), auth=auth_object)
+            print(f'response status = {response.status_code}')
+            print(response.text)
+            if not response.ok:
+                break
+        if not random_partial:
             break
