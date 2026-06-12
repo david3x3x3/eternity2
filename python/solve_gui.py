@@ -12,6 +12,7 @@ import pyopencl as cl
 _COMPLETE_RE = re.compile(r'complete=([\d.]+)%')
 _STATUS_LINE_RE = re.compile(r'^calls=\d+,')
 _NODE_LIMIT_RE = re.compile(r'^node.?limit = (\d+)')
+_NUM_SOLUTIONS_RE = re.compile(r'^num solutions = (\d+)')
 _STATUS_FIELDS = ['calls', 'nodes', 'active', 'remain', 'found',
                   'rate', 'time', 'mindepth', 'best', 'complete',
                   'node_limit']
@@ -286,6 +287,12 @@ class SolveApp:
                 self._update_status(line.strip())
             elif m := _NODE_LIMIT_RE.match(line):
                 self.status_labels['node_limit'].configure(text=m.group(1))
+            elif m := _NUM_SOLUTIONS_RE.match(line):
+                self.status_labels['found'].configure(text=m.group(1))
+                self.output.configure(state=tk.NORMAL)
+                self.output.insert(tk.END, line)
+                self.output.see(tk.END)
+                self.output.configure(state=tk.DISABLED)
             else:
                 m = _COMPLETE_RE.search(line)
                 if m:
