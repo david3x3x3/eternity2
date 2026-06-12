@@ -11,8 +11,10 @@ import pyopencl as cl
 
 _COMPLETE_RE = re.compile(r'complete=([\d.]+)%')
 _STATUS_LINE_RE = re.compile(r'^calls=\d+,')
+_NODE_LIMIT_RE = re.compile(r'^node.?limit = (\d+)')
 _STATUS_FIELDS = ['calls', 'nodes', 'active', 'found', 'remain',
-                  'rate', 'time', 'mindepth', 'best', 'complete']
+                  'rate', 'time', 'mindepth', 'best', 'complete',
+                  'node_limit']
 
 
 def _data_dir():
@@ -282,6 +284,8 @@ class SolveApp:
                 return
             if _STATUS_LINE_RE.match(line):
                 self._update_status(line.strip())
+            elif m := _NODE_LIMIT_RE.match(line):
+                self.status_labels['node_limit'].configure(text=m.group(1))
             else:
                 m = _COMPLETE_RE.search(line)
                 if m:
