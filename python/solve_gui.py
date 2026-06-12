@@ -12,7 +12,7 @@ import pyopencl as cl
 _COMPLETE_RE = re.compile(r'complete=([\d.]+)%')
 _STATUS_LINE_RE = re.compile(r'^calls=\d+,')
 _NODE_LIMIT_RE = re.compile(r'^node.?limit = (\d+)')
-_STATUS_FIELDS = ['calls', 'nodes', 'active', 'found', 'remain',
+_STATUS_FIELDS = ['calls', 'nodes', 'active', 'remain', 'found',
                   'rate', 'time', 'mindepth', 'best', 'complete',
                   'node_limit']
 
@@ -127,7 +127,7 @@ class SolveApp:
         for i, field in enumerate(_STATUS_FIELDS):
             row, col = divmod(i, cols)
             ttk.Label(stf, text=f"{field}:").grid(row=row, column=col*2, sticky=tk.W, padx=(8, 2), pady=2)
-            lbl = ttk.Label(stf, text="-", width=10, anchor=tk.W)
+            lbl = ttk.Label(stf, text="-", width=16 if col == 1 else 10, anchor=tk.W)
             lbl.grid(row=row, column=col*2+1, sticky=tk.W, padx=(0, 8), pady=2)
             self.status_labels[field] = lbl
 
