@@ -144,12 +144,25 @@ def request_row():
             password = fp.readlines()[0].strip()
         auth_object = HTTPDigestAuth('reporter', password)
         url = "https://puzzlingaddiction.com/e2db/request_row"
-        response = requests.get(url, auth=auth_object, timeout=10)
-        if response.ok:
+        try:
+            response = requests.get(url, auth=auth_object, timeout=10)
+        except requests.exceptions.Timeout:
+            print('request_row failed: request timed out', flush=True)
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f'request_row failed: {e}', flush=True)
+            return None
+        if not response.ok:
+            print(f'request_row failed: HTTP {response.status_code}', flush=True)
+            return None
+        try:
             return response.json()['row_num']
-    except Exception:
-        pass
-    return None
+        except (ValueError, KeyError) as e:
+            print(f'request_row failed: invalid response - {e}', flush=True)
+            return None
+    except Exception as e:
+        print(f'request_row failed: {e}', flush=True)
+        return None
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -354,6 +367,7 @@ if __name__ == '__main__':
                         if i+1 == len(search_args):
                             # just pick one row
                             if search_args[i] == 'r':
+                                random_partial = True
                                 if fn == '10x10-10-cached.txt':
                                     j = None
                                     if not args.noreport:
@@ -409,7 +423,14 @@ if __name__ == '__main__':
                 depth = limit
                 if search_args[i] == 'r':
                     random_partial = True
-                    j = random.randrange(len(pos_list))
+                    j = None
+                    if not args.noreport and args.puzzle == '10x10_1' and args.partial == '10,r':
+                        j = request_row()
+                    if j is None:
+                        j = random.randrange(len(pos_list))
+                        print(f'row_num = {j} (randomly assigned)', flush=True)
+                    else:
+                        print(f'row_num = {j} (assigned by web service)', flush=True)
                     search_args[i] = str(j)
                 else:
                     j = int(search_args[i])

@@ -1,9 +1,9 @@
 # eternity2
 A program for solving Eternity II style puzzles using OpenCL
 
-There's a Yahoo group for discussing this puzzle:
+There's a Groups.io group for discussing this puzzle:
 
-https://groups.yahoo.com/neo/groups/eternity_two
+https://groups.io/g/eternity2/
 
 Here are some example uses of this program and what they do.
 
