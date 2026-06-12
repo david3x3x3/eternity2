@@ -52,9 +52,10 @@ to the puzzle that include only the first 10 pieces, then pick one of
 those partial solutions and use it to find all solutions by filling in
 the remaining pieces (if possible).
 
-For now, the "r" in the partial option just picks a random number. I'm
-working on having a web server assign a number to better coordinate
-the search between multiple computers.
+The "r" in the partial option picks a row assignment. When using the
+10x10_1 puzzle, the program requests a row number from a web service
+to coordinate the search between multiple computers. If the web service
+is unavailable, it falls back to picking a random number.
 
 The "reporter" number says what name to include when reporting the
 results to the web. If you don't specify a reporter, it will be
