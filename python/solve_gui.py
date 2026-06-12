@@ -10,6 +10,9 @@ import sys
 import pyopencl as cl
 
 _COMPLETE_RE = re.compile(r'complete=([\d.]+)%')
+_STATUS_LINE_RE = re.compile(r'^calls=\d+,')
+_STATUS_FIELDS = ['calls', 'nodes', 'active', 'found', 'remain',
+                  'rate', 'time', 'mindepth', 'best', 'complete']
 
 
 def _data_dir():
@@ -87,8 +90,11 @@ class SolveApp:
             print(f'warning: could not save config: {e}')
 
     def _build_ui(self):
-        sf = ttk.LabelFrame(self.root, text="Settings", padding=5)
-        sf.pack(fill=tk.X, padx=10, pady=5)
+        top = ttk.Frame(self.root)
+        top.pack(fill=tk.X, padx=10, pady=5)
+
+        sf = ttk.LabelFrame(top, text="Settings", padding=5)
+        sf.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
         for row, label in enumerate(["Device:", "Puzzle:", "Partial:", "Reporter:"]):
             ttk.Label(sf, text=label).grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
@@ -110,6 +116,18 @@ class SolveApp:
         self.noreport_var = tk.BooleanVar()
         ttk.Checkbutton(sf, text="Don't report results", variable=self.noreport_var).grid(
             row=4, column=1, sticky=tk.W, padx=5, pady=2)
+
+        stf = ttk.LabelFrame(top, text="Status", padding=5)
+        stf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.status_labels = {}
+        cols = 2
+        for i, field in enumerate(_STATUS_FIELDS):
+            row, col = divmod(i, cols)
+            ttk.Label(stf, text=f"{field}:").grid(row=row, column=col*2, sticky=tk.W, padx=(8, 2), pady=2)
+            lbl = ttk.Label(stf, text="-", width=10, anchor=tk.W)
+            lbl.grid(row=row, column=col*2+1, sticky=tk.W, padx=(0, 8), pady=2)
+            self.status_labels[field] = lbl
 
         bf = ttk.Frame(self.root)
         bf.pack(fill=tk.X, padx=10, pady=5)
@@ -190,6 +208,8 @@ class SolveApp:
         self.output.configure(state=tk.DISABLED)
         self.progress_var.set(0.0)
         self.progress_label.configure(text="0.00%")
+        for lbl in self.status_labels.values():
+            lbl.configure(text='-')
 
         self.process = subprocess.Popen(
             self._build_args(),
@@ -211,6 +231,46 @@ class SolveApp:
         self.process.wait()
         self.output_queue.put(None)
 
+    @staticmethod
+    def _fmt_nodes(val):
+        n = int(val)
+        if n <= 9999:
+            return str(n)
+        for suffix in ['K', 'M', 'G', 'T', 'P']:
+            n /= 1000
+            if n < 1000:
+                s = f"{n:.1f}"
+                if s.endswith('.0'):
+                    s = s[:-2]
+                return s + suffix
+        return str(int(n))
+
+    @staticmethod
+    def _fmt_time(seconds):
+        s = int(seconds)
+        h, rem = divmod(s, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}h {m:02d}m {s:02d}s"
+        if m:
+            return f"{m}m {s:02d}s"
+        return f"{s}s"
+
+    def _update_status(self, line):
+        for part in line.split(','):
+            key, _, val = part.partition('=')
+            if key in self.status_labels:
+                if key == 'nodes':
+                    val = self._fmt_nodes(val)
+                elif key == 'time':
+                    val = self._fmt_time(val)
+                self.status_labels[key].configure(text=val)
+        m = _COMPLETE_RE.search(line)
+        if m:
+            pct = float(m.group(1))
+            self.progress_var.set(pct)
+            self.progress_label.configure(text=f"{pct:.2f}%")
+
     def _poll(self):
         while True:
             try:
@@ -220,15 +280,18 @@ class SolveApp:
             if line is None:
                 self._on_done()
                 return
-            m = _COMPLETE_RE.search(line)
-            if m:
-                pct = float(m.group(1))
-                self.progress_var.set(pct)
-                self.progress_label.configure(text=f"{pct:.2f}%")
-            self.output.configure(state=tk.NORMAL)
-            self.output.insert(tk.END, line)
-            self.output.see(tk.END)
-            self.output.configure(state=tk.DISABLED)
+            if _STATUS_LINE_RE.match(line):
+                self._update_status(line.strip())
+            else:
+                m = _COMPLETE_RE.search(line)
+                if m:
+                    pct = float(m.group(1))
+                    self.progress_var.set(pct)
+                    self.progress_label.configure(text=f"{pct:.2f}%")
+                self.output.configure(state=tk.NORMAL)
+                self.output.insert(tk.END, line)
+                self.output.see(tk.END)
+                self.output.configure(state=tk.DISABLED)
         self.root.after(100, self._poll)
 
     def _on_done(self):
