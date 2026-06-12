@@ -138,6 +138,19 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+def request_row():
+    try:
+        with open(resource_path('password.txt'), 'r') as fp:
+            password = fp.readlines()[0].strip()
+        auth_object = HTTPDigestAuth('reporter', password)
+        url = "https://puzzlingaddiction.com/e2db/request_row"
+        response = requests.get(url, auth=auth_object, timeout=10)
+        if response.ok:
+            return response.json()['row_num']
+    except Exception:
+        pass
+    return None
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--clinfo", help="print OpenCL information and exit", action="store_true")
@@ -342,7 +355,14 @@ if __name__ == '__main__':
                             # just pick one row
                             if search_args[i] == 'r':
                                 if fn == '10x10-10-cached.txt':
-                                    j = random.randrange(19864204)
+                                    j = None
+                                    if not args.noreport:
+                                        j = request_row()
+                                    if j is None:
+                                        j = random.randrange(19864204)
+                                        print(f'row_num = {j} (randomly assigned)', flush=True)
+                                    else:
+                                        print(f'row_num = {j} (assigned by web service)', flush=True)
                                     search_args[i] = str(j)
                                     while j >= 0:
                                         line = fp.readline()
@@ -680,7 +700,7 @@ if __name__ == '__main__':
             "solutions": solcount,
             "reporter": args.reporter if args.reporter else 'anonymous',
             "hostname": socket.gethostname(),
-            "update_dttm": datetime.now(pytz.timezone('US/Pacific')).isoformat()
+            "update_dttm": datetime.now(pytz.UTC).isoformat()
         }
         print(f'payload = {payload}')
         if not args.noreport:
