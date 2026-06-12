@@ -165,6 +165,16 @@ def request_row():
         return None
 
 if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        if sys.platform == 'win32':
+            import ctypes
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        from solve_gui import SolveApp
+        SolveApp().run()
+        sys.exit(0)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--clinfo", help="print OpenCL information and exit", action="store_true")
     parser.add_argument("--platform", help="OpenCL platform number", type=int, default=0)
@@ -708,6 +718,7 @@ if __name__ == '__main__':
             cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
             cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
 
+        print('complete=100.00%', flush=True)
         print('nodes = {}'.format(nodes+nodes1))
         print('num solutions = {}'.format(solcount))
         # print('max_found = {}'.format(max_found))
