@@ -180,6 +180,8 @@ if __name__ == '__main__':
     parser.add_argument("--platform", help="OpenCL platform number", type=int, default=0)
     parser.add_argument("--device", help="OpenCL device number", type=int, default=0)
     parser.add_argument("--maxcu", help="max compute units", type=int)
+    parser.add_argument("--wgs", help="work-group size (default: as many as fit in local memory)", type=int)
+    parser.add_argument("--groups-per-cu", help="work groups launched per compute unit (default: 2 on GPUs)", type=int)
     parser.add_argument("--puzzle", help="puzzle name, e.g. 10x10_1", type=str)
     parser.add_argument("--partial", help="specifying which part of a puzzle to search (e.g. 10,r) for rowsize 10, random row", type=str)
     parser.add_argument("--reporter", help="name or alias of person reporting result (may be public)", type=str)
@@ -246,6 +248,10 @@ if __name__ == '__main__':
     #print('pypieces = ' + str(pypieces))
     print('edgecount = ' + str(edgecount))
     fp.close()
+    # kernel limits: 128-bit used-piece mask; packed candidate entries hold an
+    # 8-bit piece number and color*edgecount*4 in 12 bits
+    if piecenum > 128 or edgecount > 32:
+        sys.exit(f'kernel supports at most 128 pieces and 32 colors (got {piecenum}, {edgecount})')
 
     fit = dict()
     for key1, val in pieces.items():
@@ -311,25 +317,33 @@ if __name__ == '__main__':
     kernel = prog.mykernel
     #print(kernel)
 
-    print('kernel.LOCAL_MEM_SIZE = ' + str(kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)))
+    static_local = kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)
+    print('kernel.LOCAL_MEM_SIZE = ' + str(static_local))
 
     # print(f'fit1 (len {len(fit1)}) = ' + str(fit1))
     # print(f'fit2 (len {len(fit2)}) = ' + str(fit2))
 
     maxcu = device.max_compute_units
-    wgs = device.local_mem_size//(width*height*2)
-    if device.type != cl.device_type.GPU:
+    # Work-group sizing. Each worker needs width*height*2 bytes of local memory,
+    # and the kernel's static local memory (lookup tables) comes out of each
+    # group's budget too. On GPUs, 2 groups per compute unit of ~40 KB each
+    # measured best (RTX 4070 Laptop, 10x10 and 8x8; docs/ROADMAP.md).
+    is_gpu = device.type == cl.device_type.GPU
+    groups_per_cu = args.groups_per_cu or (2 if is_gpu else 1)
+    group_local = min(device.local_mem_size, 40*1024) if is_gpu else device.local_mem_size
+    wgs = (group_local - static_local)//(width*height*2)
+    if not is_gpu:
         wgs = 1
     if device.max_work_group_size < wgs:
         wgs = device.max_work_group_size
-    if wgs > 100:
-        # sometimes this estimate is off, and we run out of memory
-        wgs -= 1
-
+    if args.wgs:
+        wgs = args.wgs
     print('wgs = ' + str(wgs))
     cu = device.max_compute_units
     if args.maxcu:
         cu = min(cu, args.maxcu)
+    # cu is used below as "number of work groups"
+    cu *= groups_per_cu
     print('cu = ' + str(cu))
     lm = cl.LocalMemory(wgs*(width*height*2))
     print('total workers = %d' % (wgs*cu))
@@ -474,13 +488,11 @@ if __name__ == '__main__':
         print('modified args = %s' % search_args)
 
         def list_to_np(pl):
-            piece_data = np.array([-1]*width*height*len(pl), np.int16)
+            piece_data = np.full((len(pl), width*height), -1, np.int16)
             for i, pos in enumerate(pl):
-                # print(f'encoding pos {i}: {pos_to_str(pos)} ({pos})')
-                for j, val in enumerate(pos):
-                    if j < width*height:
-                        piece_data[width*height*i+j] = val
-            return piece_data
+                k = min(len(pos), width*height)
+                piece_data[i, :k] = pos[:k]
+            return piece_data.ravel()
 
         piece_data = list_to_np(pos_list)
 
@@ -532,11 +544,13 @@ if __name__ == '__main__':
 
         solcount = 0
         calls = 0
+        gpu_seconds = 0.0  # kernel + result readback, as seen by the host
         solcount = 0
         solutions = []
         max_found = 0
 
         start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
+        search_t0 = time.perf_counter()
         last_time = 0
 
         def status(calls, nodes, workers_left, found, remain1, remain2, mindepth, best):
@@ -559,9 +573,6 @@ if __name__ == '__main__':
             # remain2 is number of days left based on remaining assignments and rate2
             remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
             # status += ',remain2={0:.2f}'.format(remain2)
-            if last_time != 0 and this_time - last_time < 2:
-                node_limit *= 2
-                print('node_limit = %d' % node_limit)
             last_time = this_time
             print(status, flush=True)
 
@@ -574,6 +585,7 @@ if __name__ == '__main__':
 
         while True:
             # print('running kernel')
+            kernel_t0 = time.perf_counter()
             kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
                    np.int32(len(pos_list)), nassign_buffer, found_buffer,
                    nfound_buffer, np.int32(limit), np.int32(width*height),
@@ -586,6 +598,12 @@ if __name__ == '__main__':
             cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
             cl._enqueue_read_buffer(queue, res_buffer, res_data)
             cl._enqueue_read_buffer(queue, best_buffer, best_data).wait()
+            call_seconds = time.perf_counter() - kernel_t0
+            gpu_seconds += call_seconds
+            # grow the per-launch node budget until a launch takes ~0.2 s
+            if call_seconds < 0.2 and node_limit < 2**30:
+                node_limit *= 2
+                print('node_limit = %d' % node_limit)
             if nassign_data[0] > len(pos_list):
                 nassign_data[0] = len(pos_list)
             # last_nodes = 0
@@ -645,15 +663,19 @@ if __name__ == '__main__':
             if (len(pos_list)-nassign_data[0]) < wgs*cu:
                 # We're running out of positions for workers. deepen_search here.
                 # Trim pos_list down to only active and unsearched positions.
-                pos_list = list(chunks(piece_data.tolist(), width*height))
+                all_pos = piece_data.reshape(-1, width*height)
 
                 remain1 = nassign_data[0]-wgs*cu
-                remain2 = len(pos_list)-nassign_data[0]
+                remain2 = len(all_pos)-nassign_data[0]
                 prev_pct *= (workers_left+remain2)/(remain1+remain2+workers_left)
 
-                untouched = pos_list[nassign_data[0]:]
-                touched = [pos_list[pos_num] for pos_num in worker_pos if pos_num != -1]
-                pos_list = touched + untouched
+                # keep positions still held by workers, then the unassigned ones,
+                # each trimmed at its first -1
+                keep = [pos_num for pos_num in worker_pos if pos_num != -1] +                     list(range(nassign_data[0], len(all_pos)))
+                kept = all_pos[keep]
+                empty = kept == -1
+                lengths = np.where(empty.any(axis=1), empty.argmax(axis=1), width*height)
+                pos_list = [row[:n].tolist() for row, n in zip(kept, lengths)]
                 if do_trace:
                     untouched_src = src_list[nassign_data[0]:]
                     touched_src = [src_list[pos_num] for pos_num in worker_pos if pos_num != -1]
@@ -667,11 +689,6 @@ if __name__ == '__main__':
                 #             if i < j and pos == pos2:
                 #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}')
                 #     sys.exit(0)
-                for posnum, pos in enumerate(pos_list):
-                    if -1 in pos:
-                        del pos[pos.index(-1):]
-                    # print(f'posnum={posnum},limit={limit}, len={len(pos)}, pos=', end='')
-                    # print_pos(pos)
                 while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
                     pos_list2 = []
                     src_list2 = []
@@ -719,6 +736,9 @@ if __name__ == '__main__':
             cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
 
         print('complete=100.00%', flush=True)
+        print(f'search_seconds = {time.perf_counter() - search_t0:.2f}')
+        print(f'gpu_seconds = {gpu_seconds:.2f}')
+        print(f'kernel_calls = {calls}')
         print('nodes = {}'.format(nodes+nodes1))
         print('num solutions = {}'.format(solcount))
         # print('max_found = {}'.format(max_found))
