@@ -300,10 +300,11 @@ def run_all_devices(platform):
     return max((p.returncode or 0) for p, log in children) if children else 0
 
 TUNING_FILE = 'tuning.json'
+TUNING_DEFAULTS = 'tuning-defaults.json'   # shipped with solve.py: results measured on known GPUs
 
-def load_tuning():
+def load_tuning(fn=TUNING_FILE):
     try:
-        with open(TUNING_FILE) as fp:
+        with open(fn) as fp:
             return json.load(fp)
     except (OSError, ValueError):
         return {}
@@ -571,11 +572,12 @@ if __name__ == '__main__':
     maxcu = device.max_compute_units
     # Work-group sizing. Each worker needs width*height*2 bytes of local memory,
     # and the kernel's static local memory (lookup tables) comes out of each
-    # group's budget too. On GPUs, 2 groups per compute unit of ~40 KB each
-    # measured best (RTX 4070 Laptop, 10x10 and 8x8; docs/ROADMAP.md).
+    # group's budget too. On GPUs, 2 groups per compute unit, each filling the
+    # group limit, measured best for 10x10 on an RTX 4070 Laptop and an RTX 3080
+    # (--tune; docs/ROADMAP.md).
     is_gpu = device.type == cl.device_type.GPU
     groups_per_cu = args.groups_per_cu or (2 if is_gpu else 1)
-    group_local = min(device.local_mem_size, 40*1024) if is_gpu else device.local_mem_size
+    group_local = device.local_mem_size
     wgs = (group_local - static_local)//(width*height*2)
     if not is_gpu:
         wgs = 1
@@ -584,10 +586,13 @@ if __name__ == '__main__':
     if args.tune:
         tune(args, device, static_local, width, height, (wgs, groups_per_cu))
         sys.exit(0)
-    tuned = load_tuning().get(tuning_key(device, args.puzzle))
-    if tuned and not (args.wgs or args.groups_per_cu):
-        wgs, groups_per_cu = tuned['wgs'], tuned['groups_per_cu']
-        print(f'using tuned config from {TUNING_FILE}: wgs={wgs}, groups_per_cu={groups_per_cu}')
+    key = tuning_key(device, args.puzzle)
+    for fn in (TUNING_FILE, resource_path(TUNING_DEFAULTS)):
+        tuned = load_tuning(fn).get(key)
+        if tuned and not (args.wgs or args.groups_per_cu):
+            wgs, groups_per_cu = tuned['wgs'], tuned['groups_per_cu']
+            print(f'using tuned config from {os.path.basename(fn)}: wgs={wgs}, groups_per_cu={groups_per_cu}')
+            break
     if args.wgs:
         wgs = args.wgs
     print('wgs = ' + str(wgs))

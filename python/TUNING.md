@@ -17,6 +17,13 @@ fastest to `tuning.json` in the current directory. After that, normal runs from
 the same directory pick it up automatically and print
 `using tuned config from tuning.json: ...`.
 
+`tuning-defaults.json` (shipped with solve.py, bundled into solve.exe) holds
+results measured on known GPUs, keyed the same way. It's used when there's no
+local `tuning.json` entry, so rentals of those GPU models need no tuning. To add
+a GPU, copy its entry from a `tuning.json` into `tuning-defaults.json`.
+Measured so far (10x10, 224 × 2 on both): RTX 4070 Laptop 14.9G nodes/s,
+RTX 3080 21.7G nodes/s.
+
 - By default it benchmarks the 10x10 puzzle on a median-size row (428132), which
   takes minutes to finish, so every trial measures steady-state speed. To tune
   for a different puzzle, pass `--puzzle` / `--partial` as for a normal run, e.g.
@@ -58,9 +65,10 @@ python solve.py --puzzle 10x10_1 --partial 10,428132 --wgs 160 --groups-per-cu 2
 - `--time-limit S`: stop after S seconds. Compare runs by `nodes / search_seconds`.
   Never reports.
 
-Explicit `--wgs` / `--groups-per-cu` override `tuning.json`. Without either,
-the default is 2 groups per compute unit, each sized to use about 40 KB of local
-memory (1 group on CPUs).
+Explicit `--wgs` / `--groups-per-cu` override `tuning.json` and
+`tuning-defaults.json`. Without any of them, the default is 2 groups per
+compute unit, each filling the per-group local memory limit (10x10 on NVIDIA:
+224 × 2), and 1 group on CPUs.
 
 What to look for:
 - Throughput rises with more workers per compute unit until all the groups no
