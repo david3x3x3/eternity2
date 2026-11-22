@@ -23,7 +23,7 @@ __constant short pieces_c[][4] = { PYPIECES };
 __kernel void mykernel(__global short* in_out, __global int* in_pos,
 		       int max_pos, __global int* nassign,
 		       __global short* found, __global int* nfound,
-		       int mindepth, int maxdepth, int limit,
+		       __global short *bases, int maxdepth, int limit,
 		       __local short *localbuf, __global int *results,
 		       __global short *g_best, __global ulong *depth_nodes) {
   int i;
@@ -65,6 +65,8 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
   for(i=0;i<width*height;i++) {
     placed[i] = in_out[in_pos[global_id]*width*height+i];
   }
+  // each position has its own base: it's done when the search backtracks above it
+  int mindepth = bases[in_pos[global_id]];
 
   int j,k,depth=-1;
   long res=0;
@@ -96,6 +98,7 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
 	break;
       }
       in_pos[global_id] = i;
+      mindepth = bases[i];
       for(i=0;i<width*height;i++) {
 	placed[i] = in_out[in_pos[global_id]*width*height+i];
       }

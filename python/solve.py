@@ -11,6 +11,7 @@ import requests
 import socket
 import subprocess
 import bisect
+from splitting import Splitter
 from datetime import datetime, timezone
 import json
 from requests.auth import HTTPDigestAuth
@@ -794,132 +795,89 @@ if __name__ == '__main__':
 
         row_num = int(search_args[-1])
 
-        # try to figure out how far to extend the search to get 10x the number of positions as workers
-        while len(pos_list) < wgs*cu*2:
-            pos_list2 = []
-            src_list2 = []
-            nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
-            pos_list = pos_list2
-            src_list = src_list2
-            limit += 1
-            # print(f'pos_list = {pos_list}')
-            print(f'{len(pos_list)} positions after extending to depth {limit}', flush=True)
-        #print('{}: pos_list = {}'.format(len(pos_list), pos_list))
-
         print('modified args = %s' % search_args)
 
-        def list_to_np(pl):
-            piece_data = np.full((len(pl), width*height), -1, np.int16)
-            for i, pos in enumerate(pl):
-                k = min(len(pos), width*height)
-                piece_data[i, :k] = pos[:k]
-            return piece_data.ravel()
-
-        piece_data = list_to_np(pos_list)
-
-        nassign_data = np.array([1], np.int32)
-
-        worker_pos = np.array([0]*wgs*cu, np.int32)
-        for i in range(wgs*cu):
-            if i > len(pos_list):
-                worker_pos[i] = -1
-            else:
-                worker_pos[i] = i
-                nassign_data[0] = i+1
-
-        nassign_buffer = cl.Buffer(ctx,
-                                  cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                  hostbuf=nassign_data)
-
-        piece_buffer = cl.Buffer(ctx,
-                                 cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                 hostbuf=piece_data)
-
-        worker_buffer = cl.Buffer(ctx,
-                                  cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                  hostbuf=worker_pos)
-
-        # len(pos_list) is just a guess at the max results per kernel run
-        #found_limit = 1000
-        found_limit = 200
-        found_data = np.array([0]*width*height*found_limit, np.int16)
-        found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY,
-                                 found_limit*width*height*2)
-
-        nfound_data = np.array([0], np.int32)
-        nfound_buffer = cl.Buffer(ctx,
-                                  cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                  hostbuf=nfound_data)
-
-        # # I ended up not using this, but may be necessary if we want to trace
-        # # solutions back to the positions they came from:
-        # found_src = np.array([0]*found_limit, np.int32)
-        # found_src_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, found_limit*4)
-
-        res_data = np.array([0]*wgs*cu, np.int32)
-        res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
-
-        # per-worker, per-cell placement counts (only filled in with --depth-stats)
-        depth_data = np.zeros(wgs*cu*width*height if args.depth_stats else 1, np.uint64)
-        depth_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=depth_data)
-
-        best = 0
-        best_data = np.array([0]*wgs*cu, np.int16)
-        best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*2)
-
-        solcount = 0
-        calls = 0
-        gpu_seconds = 0.0  # kernel + result readback, as seen by the host
+        # Work queue: positions (rows of fit2 indices, -1 after the top cell),
+        # each with its own base depth (splitting.py). Keep at least 2 positions
+        # per worker, splitting the shallowest ones when the queue runs low.
+        ncells = width*height
+        nworkers = wgs*cu
+        # positions per worker after a split: 4 measured best (32K workers on the
+        # median row: 10 re-splits, 3 s host time; 2 -> 369 re-splits, 16 -> splits too big)
+        QUEUE_FACTOR = 4
+        splitter = Splitter(fit1, fit2, pieces, width, height, edgecount)
+        rows = np.full((len(pos_list), ncells), -1, np.int16)
+        for r, pos in enumerate(pos_list):
+            rows[r, :min(len(pos), ncells)] = pos[:ncells]
+        bases = np.full(len(pos_list), limit, np.int32)
         solcount = 0
         solutions = []
-        max_found = 0
+        best = 0
+
+        def board_str(board):
+            return ' '.join(f'{fit2[p][0]+1}/{fit2[p][1]}' for p in board)
+
+        rows, bases, split_nodes, split_best, split_sols = splitter.split_until(rows, bases, QUEUE_FACTOR*nworkers)
+        nodes += split_nodes
+        best = max(best, split_best)
+        for board in split_sols:
+            solcount += 1
+            solutions.append(board_str(board))
+            print(f'solution {solcount}: {solutions[-1]}', flush=True)
+        print(f'{len(rows)} positions for {nworkers} workers', flush=True)
+
+        npos = len(rows)
+        piece_data = rows.ravel().copy()
+        base_data = bases.astype(np.int16)
+        worker_pos = np.where(np.arange(nworkers) < npos, np.arange(nworkers), -1).astype(np.int32)
+        nassign_data = np.array([min(nworkers, npos)], np.int32)
+
+        nassign_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=nassign_data)
+        piece_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=piece_data)
+        base_buffer = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=base_data)
+        worker_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=worker_pos)
+
+        # solutions found by the kernel in one launch (more would be lost)
+        found_limit = 200
+        found_data = np.array([0]*ncells*found_limit, np.int16)
+        found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, found_limit*ncells*2)
+        nfound_data = np.array([0], np.int32)
+        nfound_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=nfound_data)
+
+        res_data = np.array([0]*nworkers, np.int32)
+        res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, nworkers*4)
+
+        # per-worker, per-cell placement counts (only filled in with --depth-stats)
+        depth_data = np.zeros(nworkers*ncells if args.depth_stats else 1, np.uint64)
+        depth_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=depth_data)
+
+        best_data = np.array([0]*nworkers, np.int16)
+        best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, nworkers*2)
+
+        calls = 0
+        gpu_seconds = 0.0  # kernel + result readback, as seen by the host
+        resplits = 0
 
         start_time = int(time.time())-1 # -1 to avoid div by 0 on the time check
         search_t0 = time.perf_counter()
-        last_time = 0
 
         def status(calls, nodes, workers_left, found, remain1, remain2, mindepth, best):
-            global node_limit
-            global last_time 
-            status = f'calls={calls}'
-            status += f',nodes={nodes}'
-            status += f',active={workers_left}'
-            status += f',found={found}'
-            status += f',remain={remain1}/{remain2}'
             this_time = int(time.time())-start_time
-            status += f',rate={float(nodes)/1000000/this_time:.2f}'
-            status += f',time={this_time}'
-            status += f',mindepth={mindepth}'
-            status += f',best={best}'
-            status += f',complete={100*(1-prev_pct*(workers_left+remain2)/(remain1+remain2+workers_left)):.02f}%'
-            # rate2 is number of assignments completed per second
-            rate2 = (nassign_data[0]-wgs*cu)/this_time
-            # status += ',rate2={0:.3f}'.format(rate2)
-            # remain2 is number of days left based on remaining assignments and rate2
-            remain2 = (len(pos_list)-nassign_data[0])/rate2/(60*60*24)
-            # status += ',remain2={0:.2f}'.format(remain2)
-            last_time = this_time
-            print(status, flush=True)
-
-        workers_left = wgs*cu
-
-        def chunks(lst, n):
-            """Yield successive n-sized chunks from lst."""
-            for i in range(0, len(lst), n):
-                yield lst[i:i + n]
+            print(f'calls={calls},nodes={nodes},active={workers_left},found={found},'
+                  f'remain={remain1}/{remain2},rate={float(nodes)/1000000/this_time:.2f},'
+                  f'time={this_time},mindepth={mindepth},best={best},'
+                  f'complete={100*(1-prev_pct*(workers_left+remain2)/max(1, remain1+remain2+workers_left)):.02f}%',
+                  flush=True)
 
         while True:
-            # print('running kernel')
             kernel_t0 = time.perf_counter()
             kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
-                   np.int32(len(pos_list)), nassign_buffer, found_buffer,
-                   nfound_buffer, np.int32(limit), np.int32(width*height),
+                   np.int32(npos), nassign_buffer, found_buffer,
+                   nfound_buffer, base_buffer, np.int32(ncells),
                    np.int32(node_limit), lm, res_buffer, best_buffer, depth_buffer)
             calls += 1
-            cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
             cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
             cl._enqueue_read_buffer(queue, nassign_buffer, nassign_data)
-            #cl._enqueue_read_buffer(queue, found_buffer, found_data)
             cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
             cl._enqueue_read_buffer(queue, res_buffer, res_data)
             cl._enqueue_read_buffer(queue, best_buffer, best_data).wait()
@@ -929,131 +887,51 @@ if __name__ == '__main__':
             if call_seconds < 0.2 and node_limit < 2**30:
                 node_limit *= 2
                 print('node_limit = %d' % node_limit)
-            if nassign_data[0] > len(pos_list):
-                nassign_data[0] = len(pos_list)
-            # last_nodes = 0
-            # for i in range(wgs*cu):
-            #     last_nodes += int(res_data[i])
+            if nassign_data[0] > npos:
+                nassign_data[0] = npos
             last_nodes = int(res_data.sum())
             if last_nodes == 0:
-                break
+                break       # no worker held a position and the queue was empty
             nodes += last_nodes
-
-            this_best = int(best_data.max())
-            if this_best > best:
-                best = this_best
-            # for i in range(wgs*cu):
-            #     if best_data[i] > best:
-            #         best = best_data[i]
+            best = max(best, int(best_data.max()))
 
             if nfound_data[0] > 0:
                 cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
-                if nfound_data[0] > max_found:
-                    max_found = nfound_data[0]
             for i in range(nfound_data[0]):
-                offset = i*width*height
-                offset2 = (i+1)*width*height
-                pd2 = found_data[offset:offset2]
-                #print('pd2 = {}'.format(pd2))
                 solcount += 1
-                solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pd2.tolist()]])
-                solutions += [solstr]
-                print(f"solution {solcount}: {solstr}", flush=True)
+                solutions.append(board_str(found_data[i*ncells:(i+1)*ncells].tolist()))
+                print(f'solution {solcount}: {solutions[-1]}', flush=True)
 
-            # DEBUG CODE FOR DUPS
-            # pos_list2 = list(chunks(piece_data.tolist(), width*height))
-            # untouched = pos_list2[nassign_data[0]:]
-            # touched = [pos_list2[pos_num] for pos_num in worker_pos if pos_num != -1]
-            # pos_list2 = touched + untouched
-            # if len(pos_list2) > len(set(map(tuple, pos_list2))):
-            #     print('dups in pos_list2', flush=True)
-            #     pos_list2 = list(chunks(piece_data.tolist(), width*height))
-            #     complete = set()
-            #     for i in range(nassign_data[0]):
-            #         if i not in worker_pos:
-            #             complete.add(i)
-            #     for i, pos in enumerate(pos_list2):
-            #         if i in complete:
-            #             continue
-            #         for j, pos2 in enumerate(pos_list2):
-            #             if j in complete:
-            #                 continue
-            #             if i < j and pos == pos2:
-            #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}', flush=True)
-            #                 print(f'{i}: {src_list[i]}')
-            #                 print(f'{j}: {src_list[j]}')
-            #                 sys.exit(0)
-
-            # if False and (len(pos_list)-nassign_data[0]) < wgs*cu:
-            if (len(pos_list)-nassign_data[0]) < wgs*cu:
-                # We're running out of positions for workers. deepen_search here.
-                # Trim pos_list down to only active and unsearched positions.
-                all_pos = piece_data.reshape(-1, width*height)
-
-                remain1 = nassign_data[0]-wgs*cu
-                remain2 = len(all_pos)-nassign_data[0]
-                prev_pct *= (workers_left+remain2)/(remain1+remain2+workers_left)
-
-                # keep positions still held by workers, then the unassigned ones,
-                # each trimmed at its first -1
-                keep = [pos_num for pos_num in worker_pos if pos_num != -1] +                     list(range(nassign_data[0], len(all_pos)))
-                kept = all_pos[keep]
-                empty = kept == -1
-                lengths = np.where(empty.any(axis=1), empty.argmax(axis=1), width*height)
-                pos_list = [row[:n].tolist() for row, n in zip(kept, lengths)]
-                if do_trace:
-                    untouched_src = src_list[nassign_data[0]:]
-                    touched_src = [src_list[pos_num] for pos_num in worker_pos if pos_num != -1]
-                    src_list = touched_src + untouched_src
-                # if len(pos_list) > len(set(map(tuple, pos_list))):
-                #     print('dups in pos_list')
-                #     print(f'len(touched) = {len(touched)}')
-                #     print(f'len(untouched) = {len(untouched)}')
-                #     for i, pos in enumerate(pos_list):
-                #         for j, pos2 in enumerate(pos_list):
-                #             if i < j and pos == pos2:
-                #                 print(f'dups at {i} and {j} for {pos_to_str(pos)}')
-                #     sys.exit(0)
-                while len(pos_list) < wgs*cu*2 and len(pos_list) > 0:
-                    pos_list2 = []
-                    src_list2 = []
-                    nodes += deepen_list(pos_list, src_list, pos_list2, src_list2, limit, False)
-                    pos_list = pos_list2
-                    src_list = src_list2
-                    limit += 1
-                    print('%d positions after extending to depth %d' % (len(pos_list), limit), flush=True)
-                    if len(pos_list) > 0 and limit > best:
-                        best = limit;
-                    if limit == width*height:
-                        print('found solutions by deepening:')
-                        for pos in pos_list:
-                            del pos[width*height:]
-                            solstr = ' '.join([str(p[0]+1)+'/'+str(p[1]) for p in [fit2[p2] for p2 in pos]])
-                            solutions += [solstr]
-                            solcount += 1
-                            print(f'solution {solcount}: {solstr}')
-                        pos_list = []
-                if len(pos_list) == 0:
+            if npos - nassign_data[0] < nworkers:
+                # Queue running low: keep the positions workers hold (their latest
+                # state is in the buffer) and the unassigned ones, then split.
+                cl._enqueue_read_buffer(queue, piece_buffer, piece_data).wait()
+                live = np.concatenate([worker_pos[worker_pos >= 0], np.arange(nassign_data[0], npos)])
+                prev_pct *= len(live) / max(1, npos)
+                rows = piece_data.reshape(-1, ncells)[live]
+                bases = base_data[live].astype(np.int32)
+                rows, bases, split_nodes, split_best, split_sols = splitter.split_until(rows, bases, QUEUE_FACTOR*nworkers)
+                nodes += split_nodes
+                best = max(best, split_best)
+                for board in split_sols:
+                    solcount += 1
+                    solutions.append(board_str(board))
+                    print(f'solution {solcount}: {solutions[-1]}', flush=True)
+                resplits += 1
+                if len(rows) == 0:
                     break
-
-                piece_data = list_to_np(pos_list)
-                # reassign workers
-                for i in range(wgs*cu):
-                    worker_pos[i] = i
-                nassign_data[0] = wgs*cu
-                piece_buffer = cl.Buffer(ctx,
-                                         cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-                                         hostbuf=piece_data)
-            else:
-                cl._enqueue_write_buffer(queue, piece_buffer, piece_data)
+                npos = len(rows)
+                piece_data = rows.ravel().copy()
+                base_data = bases.astype(np.int16)
+                worker_pos[:] = np.where(np.arange(nworkers) < npos, np.arange(nworkers), -1)
+                nassign_data[0] = min(nworkers, npos)
+                piece_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=piece_data)
+                base_buffer = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=base_data)
 
             if calls % 10 == 0:
-                workers_left = 0
-                for i in worker_pos:
-                    if i != -1:
-                        workers_left += 1
-                status(calls, nodes, workers_left, solcount, nassign_data[0]-wgs*cu,
-                       len(pos_list)-nassign_data[0], limit, best)
+                workers_left = int((worker_pos >= 0).sum())
+                status(calls, nodes, workers_left, solcount, nassign_data[0]-nworkers,
+                       npos-nassign_data[0], int(base_data.min()), best)
 
             nfound_data[0] = 0
             cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
@@ -1063,6 +941,7 @@ if __name__ == '__main__':
             if args.time_limit and time.perf_counter() - search_t0 >= args.time_limit:
                 print('time limit reached; search incomplete')
                 break
+        print(f'resplits = {resplits}')
         if not (args.time_limit and time.perf_counter() - search_t0 >= args.time_limit):
             print('complete=100.00%', flush=True)
         print(f'search_seconds = {time.perf_counter() - search_t0:.2f}')
