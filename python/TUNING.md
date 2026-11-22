@@ -21,8 +21,8 @@ the same directory pick it up automatically and print
 results measured on known GPUs, keyed the same way. It's used when there's no
 local `tuning.json` entry, so rentals of those GPU models need no tuning. To add
 a GPU, copy its entry from a `tuning.json` into `tuning-defaults.json`.
-Measured so far (10x10, 224 × 2 on both): RTX 4070 Laptop 14.9G nodes/s,
-RTX 3080 21.7G nodes/s.
+Measured so far (10x10, 224 × 2 on all): RTX 4070 Laptop 14.9G nodes/s,
+RTX 3080 21.7G nodes/s, RTX 4080 34.2G nodes/s.
 
 - By default it benchmarks the 10x10 puzzle on a median-size row (428132), which
   takes minutes to finish, so every trial measures steady-state speed. To tune

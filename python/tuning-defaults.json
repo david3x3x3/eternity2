@@ -1,10 +1,23 @@
 {
  "NVIDIA GeForce RTX 4070 Laptop GPU|10x10_1": {
-  "wgs": 224, "groups_per_cu": 2, "mnodes_per_s": 14889,
-  "default_mnodes_per_s": 12808, "tuned": "2026-11-21T17:37:43"
+  "wgs": 224,
+  "groups_per_cu": 2,
+  "mnodes_per_s": 14889,
+  "default_mnodes_per_s": 12808,
+  "tuned": "2026-11-21T17:37:43"
  },
  "NVIDIA GeForce RTX 3080|10x10_1": {
-  "wgs": 224, "groups_per_cu": 2, "mnodes_per_s": 21745,
-  "default_mnodes_per_s": 19142, "tuned": "2026-11-21 (vast.ai)"
+  "wgs": 224,
+  "groups_per_cu": 2,
+  "mnodes_per_s": 21745,
+  "default_mnodes_per_s": 19142,
+  "tuned": "2026-11-21 (vast.ai)"
+ },
+ "NVIDIA GeForce RTX 4080|10x10_1": {
+  "wgs": 224,
+  "groups_per_cu": 2,
+  "mnodes_per_s": 34244,
+  "default_mnodes_per_s": 34201,
+  "tuned": "2026-11-22 (vast.ai)"
  }
 }
