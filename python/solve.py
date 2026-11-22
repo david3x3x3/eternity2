@@ -14,7 +14,6 @@ import bisect
 from datetime import datetime, timezone
 import json
 from requests.auth import HTTPDigestAuth
-import pytz
 
 print('args = %s' % ' '.join(sys.argv))
 
@@ -1039,7 +1038,7 @@ if __name__ == '__main__':
             "solutions": solcount,
             "reporter": args.reporter if args.reporter else 'anonymous',
             "hostname": (socket.gethostname() + args.hostname_suffix)[:32],
-            "update_dttm": datetime.now(pytz.UTC).isoformat()
+            "update_dttm": datetime.now(timezone.utc).isoformat()
         }
         print(f'payload = {payload}')
         if not args.noreport:

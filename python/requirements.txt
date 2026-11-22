@@ -7,5 +7,4 @@ pytools==2025.1.6
 siphash24==1.7
 typing_extensions==4.14.0
 virtualenv==20.34.0
-pytz==2025.2
 requests==2.32.5
