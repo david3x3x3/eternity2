@@ -21,8 +21,12 @@ the same directory pick it up automatically and print
 results measured on known GPUs, keyed the same way. It's used when there's no
 local `tuning.json` entry, so rentals of those GPU models need no tuning. To add
 a GPU, copy its entry from a `tuning.json` into `tuning-defaults.json`.
-Measured so far (10x10, 224 × 2 on all): RTX 4070 Laptop 14.9G nodes/s,
+Measured so far (10x10, 224 × 2 on all NVIDIA): RTX 4070 Laptop 14.9G nodes/s,
 RTX 3080 21.7G nodes/s, RTX 4070 SUPER 24.6G nodes/s, RTX 4080 34.2G nodes/s.
+AMD Navi 10 (`gfx1010:xnack-`, RX 5600 XT/5700/5700 XT): 192 × 3, 3.1G nodes/s
+(default 256 × 2: 2.9G). An RDNA "compute unit" in OpenCL is a pair of CUs with
+128 KB of local memory, and a group holds at most 256 workers, so 3 groups fit.
+Check row 380392 gives exact node counts on it.
 
 - By default it benchmarks the 10x10 puzzle on a median-size row (428132), which
   takes minutes to finish, so every trial measures steady-state speed. To tune

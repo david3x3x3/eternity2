@@ -26,5 +26,12 @@
   "mnodes_per_s": 24641,
   "default_mnodes_per_s": 24833,
   "tuned": "2026-11-22 (vast.ai)"
+ },
+ "gfx1010:xnack-|10x10_1": {
+  "wgs": 192,
+  "groups_per_cu": 3,
+  "mnodes_per_s": 3108,
+  "default_mnodes_per_s": 2868,
+  "tuned": "2026-11-22 (AMD Navi 10, Windows)"
  }
 }
