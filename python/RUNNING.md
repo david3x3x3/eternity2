@@ -22,6 +22,18 @@ python solve.py --all-devices --puzzle 10x10_1 --partial 10,r --reporter <name> 
   again.
 - `--reporter <name>`: the name stored with results (default `anonymous`).
 
+## Failure handling
+
+- Reporting on (no `--noreport`) but no password: exits at startup, before any
+  GPU work. With `--all-devices` the parent checks once, before starting
+  children.
+- The web service can't assign a row: 5 tries, 30 s apart, then exit. It never
+  falls back to random rows while reporting, because those results couldn't be
+  reported. When every row is done, the service also stops handing out rows
+  (HTTP 503), and the solver exits the same way.
+- A finished row can't be reported: 5 tries, 30 s apart. Then the payload is
+  appended to `unreported.jsonl` and the process exits, so the result isn't lost.
+
 ## Credentials
 
 The reporter password comes from the `E2DB_PASSWORD` environment variable if

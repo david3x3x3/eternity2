@@ -147,7 +147,7 @@ def get_password():
     with open(resource_path('password.txt'), 'r') as fp:
         return fp.readlines()[0].strip()
 
-def request_row():
+def request_row_once():
     try:
         auth_object = HTTPDigestAuth('reporter', get_password())
         url = "https://puzzlingaddiction.com/e2db/request_row"
@@ -299,6 +299,44 @@ def run_all_devices(platform):
             log.close()
     return max((p.returncode or 0) for p, log in children) if children else 0
 
+SERVICE_ATTEMPTS = 5      # tries for each web service call
+SERVICE_RETRY_WAIT = 30   # seconds between tries
+
+def request_row():
+    """Row assigned by the e2db web service. Retries, then exits: a row the
+    service didn't assign can't be coordinated, and results without a working
+    service can't be reported."""
+    for attempt in range(1, SERVICE_ATTEMPTS + 1):
+        j = request_row_once()
+        if j is not None:
+            return j
+        if attempt < SERVICE_ATTEMPTS:
+            print(f'retrying in {SERVICE_RETRY_WAIT} s ({attempt}/{SERVICE_ATTEMPTS})', flush=True)
+            time.sleep(SERVICE_RETRY_WAIT)
+    sys.exit('could not get a row from the web service; stopping '
+             '(use --noreport to search random rows without reporting)')
+
+def report_result(url, payload):
+    """POST a finished row, with retries. If it can't be sent, append it to
+    unreported.jsonl and return False."""
+    for attempt in range(1, SERVICE_ATTEMPTS + 1):
+        try:
+            response = requests.post(url, json=json.dumps(payload),
+                                     auth=HTTPDigestAuth('reporter', get_password()), timeout=60)
+            print(f'response status = {response.status_code}')
+            print(response.text)
+            if response.ok:
+                return True
+        except requests.exceptions.RequestException as e:
+            print(f'report failed: {e}', flush=True)
+        if attempt < SERVICE_ATTEMPTS:
+            print(f'retrying in {SERVICE_RETRY_WAIT} s ({attempt}/{SERVICE_ATTEMPTS})', flush=True)
+            time.sleep(SERVICE_RETRY_WAIT)
+    with open('unreported.jsonl', 'a') as fp:
+        fp.write(json.dumps(payload) + '\n')
+    print('could not report the result; saved it to unreported.jsonl', flush=True)
+    return False
+
 TUNING_FILE = 'tuning.json'
 TUNING_DEFAULTS = 'tuning-defaults.json'   # shipped with solve.py: results measured on known GPUs
 
@@ -414,6 +452,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.time_limit:
         args.noreport = True
+    if not args.noreport and not (args.tune or args.make_row_index or args.dump_ptx or args.clinfo):
+        try:
+            if not get_password():
+                raise OSError
+        except OSError:
+            sys.exit('no reporter password: set E2DB_PASSWORD or create password.txt '
+                     '(or use --noreport to run without reporting)')
     if args.tune:
         # default benchmark: a median-size 10x10 row that runs much longer than a trial
         args.puzzle = args.puzzle or '10x10_1'
@@ -1047,11 +1092,7 @@ if __name__ == '__main__':
         }
         print(f'payload = {payload}')
         if not args.noreport:
-            auth_object = HTTPDigestAuth('reporter', get_password())
-            response = requests.post(url, json=json.dumps(payload), auth=auth_object)
-            print(f'response status = {response.status_code}')
-            print(response.text)
-            if not response.ok:
+            if not report_result(url, payload):
                 break
         if not random_partial or args.time_limit:
             break
