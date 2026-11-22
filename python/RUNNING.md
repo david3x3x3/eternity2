@@ -27,12 +27,17 @@ python solve.py --all-devices --puzzle 10x10_1 --partial 10,r --reporter <name> 
 - Reporting on (no `--noreport`) but no password: exits at startup, before any
   GPU work. With `--all-devices` the parent checks once, before starting
   children.
-- The web service can't assign a row: 5 tries, 30 s apart, then exit. It never
-  falls back to random rows while reporting, because those results couldn't be
-  reported. When every row is done, the service also stops handing out rows
-  (HTTP 503), and the solver exits the same way.
-- A finished row can't be reported: 5 tries, 30 s apart. Then the payload is
-  appended to `unreported.jsonl` and the process exits, so the result isn't lost.
+- The web service is slow or unreachable (timeout after 60 s, connection
+  error, HTTP 5xx): the solver waits and retries indefinitely, backing off
+  30 s, 60 s, 120 s, 240 s, then every 300 s. An outage only pauses the GPU; it
+  never kills the run. (Exiting after a few tries stopped 6 of 8 GPUs on
+  2026-11-22, when the server stalled for minutes at a time.)
+- The service refuses: a wrong password (HTTP 401/403), or every row is done
+  (HTTP 503 "No available row_num"). The solver exits. It never falls back to
+  random rows while reporting, because those results couldn't be reported.
+- A finished row can't be reported: retries with the same backoff for up to an
+  hour. Then the payload is appended to `unreported.jsonl` and the solver goes
+  on to the next row, so the result isn't lost. Report those by hand later.
 
 ## Credentials
 

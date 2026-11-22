@@ -148,18 +148,28 @@ def get_password():
     with open(resource_path('password.txt'), 'r') as fp:
         return fp.readlines()[0].strip()
 
+class ServiceRefused(Exception):
+    """The web service answered but won't give a row (bad password, no rows left)."""
+
 def request_row_once():
+    """Row number from the web service, or None after a transient failure
+    (timeout, connection error, server error). Raises ServiceRefused when
+    retrying can't help."""
     try:
         auth_object = HTTPDigestAuth('reporter', get_password())
         url = "https://puzzlingaddiction.com/e2db/request_row"
         try:
-            response = requests.get(url, auth=auth_object, timeout=10)
+            response = requests.get(url, auth=auth_object, timeout=SERVICE_TIMEOUT)
         except requests.exceptions.Timeout:
             print('request_row failed: request timed out', flush=True)
             return None
         except requests.exceptions.RequestException as e:
             print(f'request_row failed: {e}', flush=True)
             return None
+        if response.status_code in (401, 403):
+            raise ServiceRefused(f'HTTP {response.status_code}: wrong reporter password?')
+        if response.status_code == 503 and 'No available row_num' in response.text:
+            raise ServiceRefused('the service has no rows left to assign')
         if not response.ok:
             print(f'request_row failed: HTTP {response.status_code}', flush=True)
             return None
@@ -168,6 +178,8 @@ def request_row_once():
         except (ValueError, KeyError) as e:
             print(f'request_row failed: invalid response - {e}', flush=True)
             return None
+    except ServiceRefused:
+        raise
     except Exception as e:
         print(f'request_row failed: {e}', flush=True)
         return None
@@ -300,39 +312,50 @@ def run_all_devices(platform):
             log.close()
     return max((p.returncode or 0) for p, log in children) if children else 0
 
-SERVICE_ATTEMPTS = 5      # tries for each web service call
-SERVICE_RETRY_WAIT = 30   # seconds between tries
+SERVICE_TIMEOUT = 60                       # seconds per web service request
+SERVICE_BACKOFF = [30, 60, 120, 240, 300]  # seconds between tries; the last repeats
+REPORT_GIVE_UP = 3600                      # seconds of failed reports before saving locally
+
+def service_wait(attempt):
+    wait = SERVICE_BACKOFF[min(attempt, len(SERVICE_BACKOFF)) - 1]
+    print(f'retrying in {wait} s (attempt {attempt})', flush=True)
+    time.sleep(wait)
 
 def request_row():
-    """Row assigned by the e2db web service. Retries, then exits: a row the
-    service didn't assign can't be coordinated, and results without a working
-    service can't be reported."""
-    for attempt in range(1, SERVICE_ATTEMPTS + 1):
-        j = request_row_once()
+    """Row assigned by the e2db web service. A slow or unreachable service is
+    retried indefinitely with backoff, so an outage only pauses the GPU. Exits
+    only when the service refuses (bad password, no rows left)."""
+    attempt = 0
+    while True:
+        try:
+            j = request_row_once()
+        except ServiceRefused as e:
+            sys.exit(f'could not get a row from the web service: {e}; stopping '
+                     '(use --noreport to search random rows without reporting)')
         if j is not None:
             return j
-        if attempt < SERVICE_ATTEMPTS:
-            print(f'retrying in {SERVICE_RETRY_WAIT} s ({attempt}/{SERVICE_ATTEMPTS})', flush=True)
-            time.sleep(SERVICE_RETRY_WAIT)
-    sys.exit('could not get a row from the web service; stopping '
-             '(use --noreport to search random rows without reporting)')
+        attempt += 1
+        service_wait(attempt)
 
 def report_result(url, payload):
-    """POST a finished row, with retries. If it can't be sent, append it to
-    unreported.jsonl and return False."""
-    for attempt in range(1, SERVICE_ATTEMPTS + 1):
+    """POST a finished row, retrying with backoff for up to REPORT_GIVE_UP
+    seconds. If it still can't be sent, append it to unreported.jsonl and
+    return False."""
+    start, attempt = time.time(), 0
+    while True:
         try:
             response = requests.post(url, json=json.dumps(payload),
-                                     auth=HTTPDigestAuth('reporter', get_password()), timeout=60)
+                                     auth=HTTPDigestAuth('reporter', get_password()), timeout=SERVICE_TIMEOUT)
             print(f'response status = {response.status_code}')
             print(response.text)
             if response.ok:
                 return True
         except requests.exceptions.RequestException as e:
             print(f'report failed: {e}', flush=True)
-        if attempt < SERVICE_ATTEMPTS:
-            print(f'retrying in {SERVICE_RETRY_WAIT} s ({attempt}/{SERVICE_ATTEMPTS})', flush=True)
-            time.sleep(SERVICE_RETRY_WAIT)
+        attempt += 1
+        if time.time() - start > REPORT_GIVE_UP:
+            break
+        service_wait(attempt)
     with open('unreported.jsonl', 'a') as fp:
         fp.write(json.dumps(payload) + '\n')
     print('could not report the result; saved it to unreported.jsonl', flush=True)
@@ -971,8 +994,7 @@ if __name__ == '__main__':
         }
         print(f'payload = {payload}')
         if not args.noreport:
-            if not report_result(url, payload):
-                break
+            report_result(url, payload)     # saved to unreported.jsonl if it can't be sent
         if not random_partial or args.time_limit:
             break
         if args.max_hours and time.time() - program_start >= args.max_hours*3600:
