@@ -5,9 +5,12 @@ import numpy as np
 import time
 import os
 import random
+import re
 import argparse
 import requests
 import socket
+import subprocess
+import bisect
 from datetime import datetime, timezone
 import json
 from requests.auth import HTTPDigestAuth
@@ -138,11 +141,16 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+def get_password():
+    """Reporter password: $E2DB_PASSWORD if set, else password.txt."""
+    if os.environ.get('E2DB_PASSWORD'):
+        return os.environ['E2DB_PASSWORD']
+    with open(resource_path('password.txt'), 'r') as fp:
+        return fp.readlines()[0].strip()
+
 def request_row():
     try:
-        with open(resource_path('password.txt'), 'r') as fp:
-            password = fp.readlines()[0].strip()
-        auth_object = HTTPDigestAuth('reporter', password)
+        auth_object = HTTPDigestAuth('reporter', get_password())
         url = "https://puzzlingaddiction.com/e2db/request_row"
         try:
             response = requests.get(url, auth=auth_object, timeout=10)
@@ -163,6 +171,213 @@ def request_row():
     except Exception as e:
         print(f'request_row failed: {e}', flush=True)
         return None
+
+ROW_INDEX_PREFIX = 3   # cells per prefix in the row index
+
+def row_index_file(puzzname, width):
+    return resource_path(f'{puzzname}-{width}-rowindex.txt')
+
+def top_rows(prefix=()):
+    """Yield every valid top row starting with `prefix` (fit2 indices), in row-id
+    order, as a position in the row cache's format: the row's fit2 indices plus
+    the 'one before the first candidate' index of the next cell. Positions whose
+    next cell has no candidates are skipped, as when the cache was built."""
+    used = {fit2[p][0] for p in prefix}
+    def rec(pos):
+        tail = list(pos)
+        fit_check(tail, True)
+        if tail[-1] == 0:
+            return
+        if len(pos) == width:
+            yield tail
+            return
+        p = tail[-1] + 1
+        while fit2[p]:
+            if fit2[p][0] not in used:
+                used.add(fit2[p][0])
+                yield from rec(pos + [p])
+                used.discard(fit2[p][0])
+            p += 1
+    yield from rec(list(prefix))
+
+def make_row_index(fn):
+    """Write the first row id of every ROW_INDEX_PREFIX-cell prefix, plus the total."""
+    entries, last, n = [], None, 0
+    for n, pos in enumerate(top_rows()):
+        if pos[:ROW_INDEX_PREFIX] != last:
+            last = pos[:ROW_INDEX_PREFIX]
+            entries.append((n, last))
+    with open(fn, 'w', newline='\n') as fp:
+        fp.write(f'total {n + 1}\n')
+        for first, prefix in entries:
+            fp.write(f'{first} {",".join(map(str, prefix))}\n')
+    print(f'wrote {fn}: {n + 1} rows, {len(entries)} prefixes')
+
+def load_row_index(fn):
+    with open(fn) as fp:
+        total = int(fp.readline().split()[1])
+        entries = [(int(a), tuple(map(int, b.split(',')))) for a, b in (l.split() for l in fp if l.strip())]
+    return total, entries
+
+def row_position(index, row_num):
+    """Position (row cache format) of top row `row_num`, via the prefix index."""
+    total, entries = index
+    if not 0 <= row_num < total:
+        sys.exit(f'row {row_num} out of range (0..{total - 1})')
+    k = bisect.bisect_right([e[0] for e in entries], row_num) - 1
+    first, prefix = entries[k]
+    for n, pos in enumerate(top_rows(prefix), first):
+        if n == row_num:
+            return pos
+
+def run_all_devices(platform):
+    """Run one child solver per device of `platform`; stop them all when this process stops."""
+    exe = [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, os.path.abspath(sys.argv[0])]
+    argv, skip = [], False
+    for a in sys.argv[1:]:                      # drop --all-devices and any --device N
+        if skip:
+            skip = False
+        elif a == '--all-devices':
+            pass
+        elif a == '--device':
+            skip = True
+        elif not a.startswith('--device='):
+            argv.append(a)
+    devices = platform.get_devices()
+    kill_on_parent_exit = None
+    if sys.platform == 'win32':
+        # a job object kills the children if this process dies, even if it's killed outright
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        job = k32.CreateJobObjectW(None, None)
+        class LIMITS(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                        ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                        ('SchedulingClass', wintypes.DWORD)]
+        class EXT_LIMITS(ctypes.Structure):
+            _fields_ = [('BasicLimitInformation', LIMITS), ('IoInfo', ctypes.c_uint64 * 6),
+                        ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                        ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+        info = EXT_LIMITS()
+        info.BasicLimitInformation.LimitFlags = 0x2000   # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+    else:
+        # Linux: the kernel sends SIGTERM to the child when this process dies
+        import ctypes, signal
+        libc = ctypes.CDLL(None)
+        def kill_on_parent_exit():
+            libc.prctl(1, signal.SIGTERM)          # PR_SET_PDEATHSIG
+        # docker stop / kill send SIGTERM: turn it into KeyboardInterrupt for cleanup below
+        def on_term(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, on_term)
+    children = []
+    try:
+        for i in range(len(devices)):
+            log = open(f'gpu{i}.log', 'a')
+            cmd = exe + argv + ['--device', str(i), '--hostname-suffix', f'/gpu{i}']
+            p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, preexec_fn=kill_on_parent_exit)
+            if sys.platform == 'win32':
+                k32.AssignProcessToJobObject(job, int(p._handle))
+            children.append((p, log))
+            print(f'device {i} ({devices[i].name.strip()}): pid {p.pid}, log gpu{i}.log', flush=True)
+        for p, log in children:
+            p.wait()
+    except KeyboardInterrupt:
+        print('stopping children', flush=True)
+        for p, log in children:
+            p.terminate()
+        for p, log in children:
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+    finally:
+        for p, log in children:
+            log.close()
+    return max((p.returncode or 0) for p, log in children) if children else 0
+
+TUNING_FILE = 'tuning.json'
+
+def load_tuning():
+    try:
+        with open(TUNING_FILE) as fp:
+            return json.load(fp)
+    except (OSError, ValueError):
+        return {}
+
+def tuning_key(device, puzzle):
+    return f'{device.name.strip()}|{puzzle}'
+
+def run_trial(base_args, wgs, groups_per_cu, seconds):
+    """Run this solver for `seconds` with one work-group config; return nodes/s (0 on failure)."""
+    exe = [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, os.path.abspath(sys.argv[0])]
+    cmd = exe + base_args + ['--wgs', str(wgs), '--groups-per-cu', str(groups_per_cu),
+                             '--time-limit', str(seconds), '--noreport']
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    nodes = re.search(r'^nodes = (\d+)$', out, re.M)
+    secs = re.search(r'^search_seconds = ([\d.]+)$', out, re.M)
+    return int(nodes.group(1)) / float(secs.group(1)) if nodes and secs else 0.0
+
+def tune(args, device, static_local, width, height, default_cfg):
+    """Benchmark work-group configs on this device and save the fastest to TUNING_FILE."""
+    per_worker = width*height*2
+    max_wgs = min(device.max_work_group_size, (device.local_mem_size - static_local)//per_worker)
+    # OpenCL only reports the per-group limit, not a compute unit's total local
+    # memory (RTX 40xx: ~100 KB, A100 ~164 KB, H100 ~228 KB). Try configs up to
+    # ~240 KB per compute unit, and stop adding groups once throughput drops.
+    cap = 240*1024
+    def fits(w, g):
+        return 0 < w <= max_wgs and g*(w*per_worker + static_local) <= cap
+    base_args = ['--platform', str(args.platform), '--device', str(args.device),
+                 '--puzzle', args.puzzle, '--partial', args.partial]
+    if args.maxcu:
+        base_args += ['--maxcu', str(args.maxcu)]
+    results = {}
+    def trial(w, g):
+        if (w, g) not in results and fits(w, g):
+            rate = run_trial(base_args, w, g, args.tune_seconds)
+            results[(w, g)] = [rate]
+            print(f'  wgs={w:4d} groups_per_cu={g}: {rate/1e6:8.0f} M nodes/s', flush=True)
+
+    print(f'tuning {device.name.strip()} on {args.puzzle} --partial {args.partial}, '
+          f'{args.tune_seconds} s per trial', flush=True)
+    trial(*default_cfg)
+    best_by_g = {}
+    for g in range(1, 17):                      # coarse pass
+        for w in sorted(set(list(range(64, max_wgs+1, 64)) + [max_wgs])):
+            trial(w, g)
+        rates = [results[(w, g2)][0] for (w, g2) in results if g2 == g]
+        if not rates:
+            break
+        best_by_g[g] = max(rates)
+        overall = max(best_by_g.values())
+        if g >= 3 and best_by_g[g] < best_by_g[g-1] and best_by_g[g] < 0.8*overall:
+            break                               # more groups no longer fit or help
+    w0, g0 = max(results, key=lambda k: results[k][0])
+    for dw in (-48, -32, -16, 16, 32, 48):      # refine around the best
+        trial(w0 + dw, g0)
+    # re-run the top 3 to guard against noise (e.g. laptop thermal throttling)
+    top = sorted(results, key=lambda k: -results[k][0])[:3]
+    print('confirming top configs:', flush=True)
+    for k in top:
+        results[k].append(run_trial(base_args, k[0], k[1], args.tune_seconds))
+        print(f'  wgs={k[0]:4d} groups_per_cu={k[1]}: {results[k][-1]/1e6:8.0f} M nodes/s', flush=True)
+    best_cfg = max(top, key=lambda k: sum(results[k])/len(results[k]))
+    rate = sum(results[best_cfg])/len(results[best_cfg])
+    default_rate = results.get(tuple(default_cfg), [0])[0]
+    tuning = load_tuning()
+    tuning[tuning_key(device, args.puzzle)] = {
+        'wgs': best_cfg[0], 'groups_per_cu': best_cfg[1], 'mnodes_per_s': round(rate/1e6),
+        'default_mnodes_per_s': round(default_rate/1e6), 'tuned': datetime.now().isoformat(timespec='seconds')}
+    with open(TUNING_FILE, 'w') as fp:
+        json.dump(tuning, fp, indent=1)
+    print(f'best: --wgs {best_cfg[0]} --groups-per-cu {best_cfg[1]} ({rate/1e6:.0f} M nodes/s; '
+          f'default {default_cfg[0]}x{default_cfg[1]}: {default_rate/1e6:.0f} M nodes/s)')
+    print(f'saved to {os.path.abspath(TUNING_FILE)}')
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
@@ -186,8 +401,23 @@ if __name__ == '__main__':
     parser.add_argument("--partial", help="specifying which part of a puzzle to search (e.g. 10,r) for rowsize 10, random row", type=str)
     parser.add_argument("--reporter", help="name or alias of person reporting result (may be public)", type=str)
     parser.add_argument("--noreport", help="don't report the results", action="store_true")
+    parser.add_argument("--time-limit", help="stop the search after this many seconds (benchmarking; never reports)", type=float)
+    parser.add_argument("--tune", help=f"benchmark work-group configs for this device and puzzle, save the best to {TUNING_FILE}", action="store_true")
+    parser.add_argument("--dump-ptx", help="write the compiled kernel (PTX on NVIDIA) to this file and exit", type=str)
+    parser.add_argument("--depth-stats", help="count nodes per board cell (slower; for analysis)", action="store_true")
+    parser.add_argument("--max-hours", help="with a random/assigned row (10,r): don't start new rows after this many hours", type=float)
+    parser.add_argument("--all-devices", help="run one solver per device of the platform (logs: gpu<N>.log); stopping this process stops them", action="store_true")
+    parser.add_argument("--hostname-suffix", help=argparse.SUPPRESS, default='')
+    parser.add_argument("--make-row-index", help="write the top-row index for --puzzle (lets --partial W,N run without the row cache)", action="store_true")
+    parser.add_argument("--tune-seconds", help="seconds per tuning trial (default 8)", type=float, default=8)
 
     args = parser.parse_args()
+    if args.time_limit:
+        args.noreport = True
+    if args.tune:
+        # default benchmark: a median-size 10x10 row that runs much longer than a trial
+        args.puzzle = args.puzzle or '10x10_1'
+        args.partial = args.partial or '10,428132'
     for i in range(len(cl.get_platforms())):
         p = cl.get_platforms()[i]
         print('Plaform ' + str(i) + ': ' + p.name)
@@ -196,7 +426,12 @@ if __name__ == '__main__':
             print('  Device ' + str(j) + ': ' + str(d.name) + ' (' + str(d.type) + ')')
 
     platform = cl.get_platforms()[args.platform]
+    if args.all_devices:
+        if args.tune:
+            sys.exit('--tune runs on one device; use --device N')
+        sys.exit(run_all_devices(platform))
     device = platform.get_devices()[args.device]
+    program_start = time.time()
 
     print(platform)
     print("===============================================================")
@@ -296,6 +531,10 @@ if __name__ == '__main__':
         else:
             fit1[pos] = 2
 
+    if args.make_row_index:
+        make_row_index(row_index_file(puzzname, width))
+        sys.exit(0)
+
     fp = open(resource_path('eternity2_kernel.cl'),'r')
     prgsrc = fp.read()
     fp.close()
@@ -304,6 +543,8 @@ if __name__ == '__main__':
     # print('fit2 =', fit2)
     # print('fit2c =', fit2c)
     prgsrc = prgsrc.replace('KMEMTYPE','local')
+    if args.depth_stats:
+        prgsrc = '#define DEPTH_STATS\n' + prgsrc
     prgsrc = prgsrc.replace('KGLOBMEM','0')
     prgsrc = prgsrc.replace('PYPIECES',pypieces)
     prgsrc = prgsrc.replace('PYFITTABLE1',','.join(map(str,fit1)))
@@ -315,6 +556,11 @@ if __name__ == '__main__':
     # print('src = ' + prgsrc)
     prog = cl.Program(ctx, prgsrc).build()
     kernel = prog.mykernel
+    if args.dump_ptx:
+        with open(args.dump_ptx, 'wb') as fp:
+            fp.write(prog.binaries[0])
+        print(f'wrote {args.dump_ptx}')
+        sys.exit(0)
     #print(kernel)
 
     static_local = kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)
@@ -336,6 +582,13 @@ if __name__ == '__main__':
         wgs = 1
     if device.max_work_group_size < wgs:
         wgs = device.max_work_group_size
+    if args.tune:
+        tune(args, device, static_local, width, height, (wgs, groups_per_cu))
+        sys.exit(0)
+    tuned = load_tuning().get(tuning_key(device, args.puzzle))
+    if tuned and not (args.wgs or args.groups_per_cu):
+        wgs, groups_per_cu = tuned['wgs'], tuned['groups_per_cu']
+        print(f'using tuned config from {TUNING_FILE}: wgs={wgs}, groups_per_cu={groups_per_cu}')
     if args.wgs:
         wgs = args.wgs
     print('wgs = ' + str(wgs))
@@ -382,7 +635,26 @@ if __name__ == '__main__':
         while True:
             if depth == 0:
                 fn = f'{puzzname}-{limit}-cached.txt'
-                if os.path.exists(fn):
+                index_fn = row_index_file(puzzname, limit)
+                if limit == width and i+1 == len(search_args) and os.path.exists(index_fn):
+                    # one top row: look it up in the small row index (no row cache needed)
+                    index = load_row_index(index_fn)
+                    if search_args[i] == 'r':
+                        random_partial = True
+                        j = None
+                        if not args.noreport and puzzname == '10x10' and limit == 10:
+                            j = request_row()
+                        if j is None:
+                            j = random.randrange(index[0])
+                            print(f'row_num = {j} (randomly assigned)', flush=True)
+                        else:
+                            print(f'row_num = {j} (assigned by web service)', flush=True)
+                        search_args[i] = str(j)
+                    pos_list = [row_position(index, int(search_args[i]))]
+                    print(f'row {search_args[i]} from {os.path.basename(index_fn)}')
+                    depth = limit
+                    arg_shortcut = True
+                elif os.path.exists(fn):
                     depth = limit
                     with open(fn, 'r') as fp:
                         pos_list = []
@@ -538,6 +810,10 @@ if __name__ == '__main__':
         res_data = np.array([0]*wgs*cu, np.int32)
         res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*4)
 
+        # per-worker, per-cell placement counts (only filled in with --depth-stats)
+        depth_data = np.zeros(wgs*cu*width*height if args.depth_stats else 1, np.uint64)
+        depth_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=depth_data)
+
         best = 0
         best_data = np.array([0]*wgs*cu, np.int16)
         best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, wgs*cu*2)
@@ -589,7 +865,7 @@ if __name__ == '__main__':
             kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
                    np.int32(len(pos_list)), nassign_buffer, found_buffer,
                    nfound_buffer, np.int32(limit), np.int32(width*height),
-                   np.int32(node_limit), lm, res_buffer, best_buffer)
+                   np.int32(node_limit), lm, res_buffer, best_buffer, depth_buffer)
             calls += 1
             cl._enqueue_read_buffer(queue, piece_buffer, piece_data)
             cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
@@ -735,11 +1011,22 @@ if __name__ == '__main__':
             cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
             cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
 
-        print('complete=100.00%', flush=True)
+            if args.time_limit and time.perf_counter() - search_t0 >= args.time_limit:
+                print('time limit reached; search incomplete')
+                break
+        if not (args.time_limit and time.perf_counter() - search_t0 >= args.time_limit):
+            print('complete=100.00%', flush=True)
         print(f'search_seconds = {time.perf_counter() - search_t0:.2f}')
         print(f'gpu_seconds = {gpu_seconds:.2f}')
         print(f'kernel_calls = {calls}')
         print('nodes = {}'.format(nodes+nodes1))
+        if args.depth_stats:
+            cl._enqueue_read_buffer(queue, depth_buffer, depth_data).wait()
+            per_depth = depth_data.reshape(-1, width*height).sum(axis=0)
+            print(f'depth_stats_total = {int(per_depth.sum())} (kernel nodes; host deepen nodes not included)')
+            for d, n in enumerate(per_depth):
+                if n:
+                    print(f'depth_nodes {d} {int(n)}')
         print('num solutions = {}'.format(solcount))
         # print('max_found = {}'.format(max_found))
         print(f'best = {best}')
@@ -751,18 +1038,19 @@ if __name__ == '__main__':
             "best": best,
             "solutions": solcount,
             "reporter": args.reporter if args.reporter else 'anonymous',
-            "hostname": socket.gethostname(),
+            "hostname": (socket.gethostname() + args.hostname_suffix)[:32],
             "update_dttm": datetime.now(pytz.UTC).isoformat()
         }
         print(f'payload = {payload}')
         if not args.noreport:
-            with open(resource_path('password.txt'),'r') as fp:
-                password = fp.readlines()[0].strip()
-            auth_object = HTTPDigestAuth('reporter', password)
+            auth_object = HTTPDigestAuth('reporter', get_password())
             response = requests.post(url, json=json.dumps(payload), auth=auth_object)
             print(f'response status = {response.status_code}')
             print(response.text)
             if not response.ok:
                 break
-        if not random_partial:
+        if not random_partial or args.time_limit:
+            break
+        if args.max_hours and time.time() - program_start >= args.max_hours*3600:
+            print(f'--max-hours {args.max_hours} reached; not starting another row', flush=True)
             break

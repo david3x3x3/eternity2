@@ -25,7 +25,7 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
 		       __global short* found, __global int* nfound,
 		       int mindepth, int maxdepth, int limit,
 		       __local short *localbuf, __global int *results,
-		       __global short *g_best) {
+		       __global short *g_best, __global ulong *depth_nodes) {
   int i;
   short best;
   int local_id = get_local_id(0);
@@ -139,6 +139,10 @@ __kernel void mykernel(__global short* in_out, __global int* in_pos,
       break;
     }
 
+#ifdef DEPTH_STATS
+    // per-worker histogram of placements by cell (only with --depth-stats)
+    depth_nodes[global_id*WIDTH*HEIGHT + depth]++;
+#endif
     FLIP(j);
     if(++depth > best) {
       best = depth;
