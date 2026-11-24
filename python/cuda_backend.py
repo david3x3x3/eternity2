@@ -63,7 +63,16 @@ def _load_nvrtc():
             if 'builtins' in f or f.endswith('.alt.dll'):
                 continue
             if sys.platform == 'win32':
-                os.add_dll_directory(d)    # nvrtc loads nvrtc-builtins from here
+                # nvrtc loads nvrtc-builtins64_XYZ.dll by bare name with the
+                # standard search (PATH, not add_dll_directory), so it fails
+                # unless this dir is on PATH. Preloading it by full path makes
+                # that lookup find the already-loaded module.
+                for b in glob.glob(os.path.join(d, 'nvrtc-builtins64_*.dll')):
+                    try:
+                        ctypes.CDLL(b)
+                    except OSError:
+                        pass
+                os.add_dll_directory(d)
             try:
                 return ctypes.CDLL(f)
             except OSError:
