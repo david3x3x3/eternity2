@@ -21,6 +21,39 @@ print('args = %s' % ' '.join(sys.argv))
 #os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'     # rather cool but important for CodeXL
 #os.environ['PYOPENCL_NO_CACHE'] = '1'            # obsoletes relics which can negatively impact CodeXL
 
+class OpenCLGpu:
+    """The device operations the search loop uses, on OpenCL (cuda_backend.Gpu
+    is the CUDA version)."""
+    def __init__(self, device):
+        self.device = device
+        self.ctx = cl.Context([device])
+        self.queue = cl.CommandQueue(self.ctx)
+
+    def build(self, src):
+        self.prog = cl.Program(self.ctx, src).build()
+        self.kernel = self.prog.mykernel
+        self.static_local = self.kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, self.device)
+
+    def buffer(self, hostbuf=None, nbytes=None):
+        if hostbuf is not None:
+            return cl.Buffer(self.ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=hostbuf)
+        return cl.Buffer(self.ctx, cl.mem_flags.READ_WRITE, nbytes)
+
+    def free(self, buf):
+        buf.release()
+
+    def write(self, buf, arr):
+        cl._enqueue_write_buffer(self.queue, buf, arr)
+
+    def read(self, buf, arr):
+        cl._enqueue_read_buffer(self.queue, buf, arr).wait()
+
+    def launch(self, nglobal, nlocal, args, shared_bytes):
+        # the kernel's __local stack argument comes after the 9th argument
+        args = list(args)
+        args.insert(9, cl.LocalMemory(shared_bytes))
+        self.kernel(self.queue, (nglobal,), (nlocal,), *args)
+
 def pos_to_str(p):
     res = ''
     for p0 in p:
@@ -371,8 +404,8 @@ def load_tuning(fn=TUNING_FILE):
     except (OSError, ValueError):
         return {}
 
-def tuning_key(device, puzzle):
-    return f'{device.name.strip()}|{puzzle}'
+def tuning_key(device, puzzle, cuda=False):
+    return f'{device.name.strip()}{" (CUDA)" if cuda else ""}|{puzzle}'
 
 def run_trial(base_args, wgs, groups_per_cu, seconds):
     """Run this solver for `seconds` with one work-group config; return nodes/s (0 on failure)."""
@@ -387,15 +420,23 @@ def run_trial(base_args, wgs, groups_per_cu, seconds):
 def tune(args, device, static_local, width, height, default_cfg):
     """Benchmark work-group configs on this device and save the fastest to TUNING_FILE."""
     per_worker = width*height*2
-    max_wgs = min(device.max_work_group_size, (device.local_mem_size - static_local)//per_worker)
-    # OpenCL only reports the per-group limit, not a compute unit's total local
-    # memory (RTX 40xx: ~100 KB, A100 ~164 KB, H100 ~228 KB). Try configs up to
-    # ~240 KB per compute unit, and stop adding groups once throughput drops.
-    cap = 240*1024
+    if args.cuda:
+        # CUDA reports the real limits: a block can opt in to more than 48 KB,
+        # and the SM's total shared memory is known
+        max_wgs = min(device.max_work_group_size, (device.local_mem_size_optin - static_local)//per_worker)
+        cap = device.local_mem_per_cu
+    else:
+        max_wgs = min(device.max_work_group_size, (device.local_mem_size - static_local)//per_worker)
+        # OpenCL only reports the per-group limit, not a compute unit's total local
+        # memory (RTX 40xx: ~100 KB, A100 ~164 KB, H100 ~228 KB). Try configs up to
+        # ~240 KB per compute unit, and stop adding groups once throughput drops.
+        cap = 240*1024
     def fits(w, g):
         return 0 < w <= max_wgs and g*(w*per_worker + static_local) <= cap
     base_args = ['--platform', str(args.platform), '--device', str(args.device),
                  '--puzzle', args.puzzle, '--partial', args.partial]
+    if args.cuda:
+        base_args += ['--cuda']
     if args.maxcu:
         base_args += ['--maxcu', str(args.maxcu)]
     results = {}
@@ -432,7 +473,7 @@ def tune(args, device, static_local, width, height, default_cfg):
     rate = sum(results[best_cfg])/len(results[best_cfg])
     default_rate = results.get(tuple(default_cfg), [0])[0]
     tuning = load_tuning()
-    tuning[tuning_key(device, args.puzzle)] = {
+    tuning[tuning_key(device, args.puzzle, args.cuda)] = {
         'wgs': best_cfg[0], 'groups_per_cu': best_cfg[1], 'mnodes_per_s': round(rate/1e6),
         'default_mnodes_per_s': round(default_rate/1e6), 'tuned': datetime.now().isoformat(timespec='seconds')}
     with open(TUNING_FILE, 'w') as fp:
@@ -454,6 +495,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--clinfo", help="print OpenCL information and exit", action="store_true")
+    parser.add_argument("--cuda", help="use CUDA instead of OpenCL (NVIDIA only; --device picks the GPU, --platform is ignored)", action="store_true")
     parser.add_argument("--platform", help="OpenCL platform number", type=int, default=0)
     parser.add_argument("--device", help="OpenCL device number", type=int, default=0)
     parser.add_argument("--maxcu", help="max compute units", type=int)
@@ -487,14 +529,19 @@ if __name__ == '__main__':
         # default benchmark: a median-size 10x10 row that runs much longer than a trial
         args.puzzle = args.puzzle or '10x10_1'
         args.partial = args.partial or '10,428132'
-    for i in range(len(cl.get_platforms())):
-        p = cl.get_platforms()[i]
-        print('Plaform ' + str(i) + ': ' + p.name)
-        for j in range(len(p.get_devices())):
-            d = p.get_devices()[j]
-            print('  Device ' + str(j) + ': ' + str(d.name) + ' (' + str(d.type) + ')')
-
-    platform = cl.get_platforms()[args.platform]
+    if args.cuda:
+        import cuda_backend
+        platform = cuda_backend.Platform()
+        for j, d in enumerate(platform.get_devices()):
+            print(f'CUDA device {j}: {d.name} (sm_{d.compute_capability[0]}{d.compute_capability[1]})')
+    else:
+        for i in range(len(cl.get_platforms())):
+            p = cl.get_platforms()[i]
+            print('Plaform ' + str(i) + ': ' + p.name)
+            for j in range(len(p.get_devices())):
+                d = p.get_devices()[j]
+                print('  Device ' + str(j) + ': ' + str(d.name) + ' (' + str(d.type) + ')')
+        platform = cl.get_platforms()[args.platform]
     if args.all_devices:
         if args.tune:
             sys.exit('--tune runs on one device; use --device N')
@@ -502,17 +549,23 @@ if __name__ == '__main__':
     device = platform.get_devices()[args.device]
     program_start = time.time()
 
-    print(platform)
-    print("===============================================================")
-    print("Platform name:", platform.name)
-    print("Platform profile:", platform.profile)
-    print("Platform vendor:", platform.vendor)
-    print("Platform version:", platform.version)
+    if args.cuda:
+        is_gpu = True
+        print("===============================================================")
+        print("Backend: CUDA")
+    else:
+        is_gpu = device.type == cl.device_type.GPU
+        print(platform)
+        print("===============================================================")
+        print("Platform name:", platform.name)
+        print("Platform profile:", platform.profile)
+        print("Platform vendor:", platform.vendor)
+        print("Platform version:", platform.version)
 
     print(device)
     print("---------------------------------------------------------------")
     print("Device name:", device.name)
-    print("Device type:", cl.device_type.to_string(device.type))
+    print("Device type:", 'GPU' if args.cuda else cl.device_type.to_string(device.type))
     print("Device memory: ", device.global_mem_size//1024//1024, 'MB')
     print("Device local memory: ", device.local_mem_size, 'B')
     print("Device max clock speed:", device.max_clock_frequency, 'MHz')
@@ -523,10 +576,7 @@ if __name__ == '__main__':
     if args.clinfo:
         sys.exit(0)
 
-    ctx = cl.Context([device])
-    print('ctx = {}'.format(ctx))
-    queue = cl.CommandQueue(ctx)
-    print('queue = {}'.format(queue))
+    gpu = cuda_backend.Gpu(device) if args.cuda else OpenCLGpu(device)
 
     edgecount = 0
 
@@ -623,16 +673,16 @@ if __name__ == '__main__':
     prgsrc = prgsrc.replace('KHEIGHT',str(height))
 
     # print('src = ' + prgsrc)
-    prog = cl.Program(ctx, prgsrc).build()
-    kernel = prog.mykernel
+    gpu.build(prgsrc)
     if args.dump_ptx:
         with open(args.dump_ptx, 'wb') as fp:
-            fp.write(prog.binaries[0])
+            fp.write(gpu.cubin.raw if args.cuda else gpu.prog.binaries[0])
         print(f'wrote {args.dump_ptx}')
         sys.exit(0)
-    #print(kernel)
+    if args.cuda:
+        print(f'kernel registers = {gpu.num_regs}')
 
-    static_local = kernel.get_work_group_info(cl.kernel_work_group_info.LOCAL_MEM_SIZE, device)
+    static_local = gpu.static_local
     print('kernel.LOCAL_MEM_SIZE = ' + str(static_local))
 
     # print(f'fit1 (len {len(fit1)}) = ' + str(fit1))
@@ -643,10 +693,16 @@ if __name__ == '__main__':
     # and the kernel's static local memory (lookup tables) comes out of each
     # group's budget too. On GPUs, 2 groups per compute unit, each filling the
     # group limit, measured best for 10x10 on an RTX 4070 Laptop and an RTX 3080
-    # (--tune; docs/ROADMAP.md).
-    is_gpu = device.type == cl.device_type.GPU
-    groups_per_cu = args.groups_per_cu or (2 if is_gpu else 1)
-    group_local = device.local_mem_size
+    # (--tune; docs/ROADMAP.md). CUDA can give one block more than OpenCL's
+    # 48 KB, so there the default is 1 block per SM filling the opt-in limit:
+    # one copy of the tables leaves room for more workers (RTX 4070 Laptop:
+    # 486 x 1 is 8% faster than 224 x 2).
+    if args.cuda:
+        groups_per_cu = args.groups_per_cu or 1
+        group_local = device.local_mem_size_optin if groups_per_cu == 1 else device.local_mem_size
+    else:
+        groups_per_cu = args.groups_per_cu or (2 if is_gpu else 1)
+        group_local = device.local_mem_size
     wgs = (group_local - static_local)//(width*height*2)
     if not is_gpu:
         wgs = 1
@@ -655,7 +711,7 @@ if __name__ == '__main__':
     if args.tune:
         tune(args, device, static_local, width, height, (wgs, groups_per_cu))
         sys.exit(0)
-    key = tuning_key(device, args.puzzle)
+    key = tuning_key(device, args.puzzle, args.cuda)
     for fn in (TUNING_FILE, resource_path(TUNING_DEFAULTS)):
         tuned = load_tuning(fn).get(key)
         if tuned and not (args.wgs or args.groups_per_cu):
@@ -671,7 +727,7 @@ if __name__ == '__main__':
     # cu is used below as "number of work groups"
     cu *= groups_per_cu
     print('cu = ' + str(cu))
-    lm = cl.LocalMemory(wgs*(width*height*2))
+    shared_bytes = wgs*(width*height*2)    # the workers' stacks
     print('total workers = %d' % (wgs*cu))
 
     while True:
@@ -855,27 +911,27 @@ if __name__ == '__main__':
         worker_pos = np.where(np.arange(nworkers) < npos, np.arange(nworkers), -1).astype(np.int32)
         nassign_data = np.array([min(nworkers, npos)], np.int32)
 
-        nassign_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=nassign_data)
-        piece_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=piece_data)
-        base_buffer = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=base_data)
-        worker_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=worker_pos)
+        nassign_buffer = gpu.buffer(hostbuf=nassign_data)
+        piece_buffer = gpu.buffer(hostbuf=piece_data)
+        base_buffer = gpu.buffer(hostbuf=base_data)
+        worker_buffer = gpu.buffer(hostbuf=worker_pos)
 
         # solutions found by the kernel in one launch (more would be lost)
         found_limit = 200
         found_data = np.array([0]*ncells*found_limit, np.int16)
-        found_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, found_limit*ncells*2)
+        found_buffer = gpu.buffer(nbytes=found_limit*ncells*2)
         nfound_data = np.array([0], np.int32)
-        nfound_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=nfound_data)
+        nfound_buffer = gpu.buffer(hostbuf=nfound_data)
 
         res_data = np.array([0]*nworkers, np.int32)
-        res_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, nworkers*4)
+        res_buffer = gpu.buffer(nbytes=nworkers*4)
 
         # per-worker, per-cell placement counts (only filled in with --depth-stats)
         depth_data = np.zeros(nworkers*ncells if args.depth_stats else 1, np.uint64)
-        depth_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=depth_data)
+        depth_buffer = gpu.buffer(hostbuf=depth_data)
 
         best_data = np.array([0]*nworkers, np.int16)
-        best_buffer = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, nworkers*2)
+        best_buffer = gpu.buffer(nbytes=nworkers*2)
 
         calls = 0
         gpu_seconds = 0.0  # kernel + result readback, as seen by the host
@@ -894,16 +950,16 @@ if __name__ == '__main__':
 
         while True:
             kernel_t0 = time.perf_counter()
-            kernel(queue, (cu*wgs,), (wgs,), piece_buffer, worker_buffer,
-                   np.int32(npos), nassign_buffer, found_buffer,
-                   nfound_buffer, base_buffer, np.int32(ncells),
-                   np.int32(node_limit), lm, res_buffer, best_buffer, depth_buffer)
+            gpu.launch(cu*wgs, wgs, (piece_buffer, worker_buffer,
+                       np.int32(npos), nassign_buffer, found_buffer,
+                       nfound_buffer, base_buffer, np.int32(ncells),
+                       np.int32(node_limit), res_buffer, best_buffer, depth_buffer), shared_bytes)
             calls += 1
-            cl._enqueue_read_buffer(queue, worker_buffer, worker_pos)
-            cl._enqueue_read_buffer(queue, nassign_buffer, nassign_data)
-            cl._enqueue_read_buffer(queue, nfound_buffer, nfound_data)
-            cl._enqueue_read_buffer(queue, res_buffer, res_data)
-            cl._enqueue_read_buffer(queue, best_buffer, best_data).wait()
+            gpu.read(worker_buffer, worker_pos)
+            gpu.read(nassign_buffer, nassign_data)
+            gpu.read(nfound_buffer, nfound_data)
+            gpu.read(res_buffer, res_data)
+            gpu.read(best_buffer, best_data)
             call_seconds = time.perf_counter() - kernel_t0
             gpu_seconds += call_seconds
             # grow the per-launch node budget until a launch takes ~0.2 s
@@ -919,7 +975,7 @@ if __name__ == '__main__':
             best = max(best, int(best_data.max()))
 
             if nfound_data[0] > 0:
-                cl._enqueue_read_buffer(queue, found_buffer, found_data).wait()
+                gpu.read(found_buffer, found_data)
             for i in range(nfound_data[0]):
                 solcount += 1
                 solutions.append(board_str(found_data[i*ncells:(i+1)*ncells].tolist()))
@@ -928,7 +984,7 @@ if __name__ == '__main__':
             if npos - nassign_data[0] < nworkers:
                 # Queue running low: keep the positions workers hold (their latest
                 # state is in the buffer) and the unassigned ones, then split.
-                cl._enqueue_read_buffer(queue, piece_buffer, piece_data).wait()
+                gpu.read(piece_buffer, piece_data)
                 live = np.concatenate([worker_pos[worker_pos >= 0], np.arange(nassign_data[0], npos)])
                 prev_pct *= len(live) / max(1, npos)
                 rows = piece_data.reshape(-1, ncells)[live]
@@ -948,8 +1004,10 @@ if __name__ == '__main__':
                 base_data = bases.astype(np.int16)
                 worker_pos[:] = np.where(np.arange(nworkers) < npos, np.arange(nworkers), -1)
                 nassign_data[0] = min(nworkers, npos)
-                piece_buffer = cl.Buffer(ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=piece_data)
-                base_buffer = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=base_data)
+                gpu.free(piece_buffer)
+                gpu.free(base_buffer)
+                piece_buffer = gpu.buffer(hostbuf=piece_data)
+                base_buffer = gpu.buffer(hostbuf=base_data)
 
             if calls % 10 == 0:
                 workers_left = int((worker_pos >= 0).sum())
@@ -957,9 +1015,9 @@ if __name__ == '__main__':
                        npos-nassign_data[0], int(base_data.min()), best)
 
             nfound_data[0] = 0
-            cl._enqueue_write_buffer(queue, worker_buffer, worker_pos)
-            cl._enqueue_write_buffer(queue, nassign_buffer, nassign_data)
-            cl._enqueue_write_buffer(queue, nfound_buffer, nfound_data)
+            gpu.write(worker_buffer, worker_pos)
+            gpu.write(nassign_buffer, nassign_data)
+            gpu.write(nfound_buffer, nfound_data)
 
             if args.time_limit and time.perf_counter() - search_t0 >= args.time_limit:
                 print('time limit reached; search incomplete')
@@ -972,12 +1030,15 @@ if __name__ == '__main__':
         print(f'kernel_calls = {calls}')
         print('nodes = {}'.format(nodes+nodes1))
         if args.depth_stats:
-            cl._enqueue_read_buffer(queue, depth_buffer, depth_data).wait()
+            gpu.read(depth_buffer, depth_data)
             per_depth = depth_data.reshape(-1, width*height).sum(axis=0)
             print(f'depth_stats_total = {int(per_depth.sum())} (kernel nodes; host deepen nodes not included)')
             for d, n in enumerate(per_depth):
                 if n:
                     print(f'depth_nodes {d} {int(n)}')
+        for b in (nassign_buffer, piece_buffer, base_buffer, worker_buffer, found_buffer,
+                  nfound_buffer, res_buffer, depth_buffer, best_buffer):
+            gpu.free(b)
         print('num solutions = {}'.format(solcount))
         # print('max_found = {}'.format(max_found))
         print(f'best = {best}')

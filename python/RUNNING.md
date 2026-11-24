@@ -21,6 +21,12 @@ python solve.py --all-devices --puzzle 10x10_1 --partial 10,r --reporter <name> 
   work only. The server locks assigned rows for 7 days, then hands them out
   again.
 - `--reporter <name>`: the name stored with results (default `anonymous`).
+- `--cuda` (NVIDIA only): run the same kernel through CUDA instead of OpenCL,
+  5-8% faster (RTX 3070 / RTX 4070 Laptop) because a CUDA block can use more
+  shared memory. Results are identical. It needs NVRTC, the CUDA runtime
+  compiler: the CUDA images on vast.ai have it in /usr/local/cuda; elsewhere
+  install a CUDA 12 toolkit or `pip install nvidia-cuda-nvrtc-cu12`. It works
+  with `--all-devices` (one child per CUDA device; `--platform` is ignored).
 
 ## Failure handling
 

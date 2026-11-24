@@ -58,6 +58,17 @@ Check row 380392 gives exact node counts on it.
 }
 ```
 
+## CUDA (`--cuda`)
+
+Under `--cuda` the default is one block per SM, as large as fits (10x10 on
+RTX 30xx/40xx: 486 x 1). CUDA lets a block use about 99 KB of shared memory,
+versus OpenCL's 48 KB per group, so one copy of the lookup tables leaves room
+for 486 workers per SM instead of 448. `--tune --cuda` sweeps CUDA configs and
+saves them under a separate key (`<device> (CUDA)|<puzzle>`). On an RTX 3070
+it confirmed 486 x 1 at 15.0G nodes/s (OpenCL 224 x 2: 14.3G). On the RTX 4070
+Laptop it's 16.1G vs 14.9G. Throughput rises with workers per SM right up to
+the shared-memory limit.
+
 ## Manual
 
 ```
